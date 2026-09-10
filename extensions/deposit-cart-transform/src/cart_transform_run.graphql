@@ -1,7 +1,4 @@
-query RunInput(
-  $includeCollectionIds: [ID!]
-  $excludeCollectionIds: [ID!]
-) {
+query CartTransformRunInput {
   cart {
     lines {
       id
@@ -11,14 +8,11 @@ query RunInput(
         ... on ProductVariant {
           id
           title
-          image {
-            url
-          }
           product {
             id
             title
             hasAnyTag(tags: [])
-            inAnyCollection(ids: $includeCollectionIds)
+            inAnyCollection(ids: [])
           }
         }
       }

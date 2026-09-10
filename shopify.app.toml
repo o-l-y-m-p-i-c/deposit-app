@@ -33,9 +33,9 @@ redirect_urls = [ "https://deposit-app.onrender.com/auth/callback" ]
 embedded = false
 
 [[extensions]]
-type = "function"
+type = "cart_transform"
 name = "Deposit Cart Transform"
-path = "extensions/cart-transform"
+path = "extensions/deposit-cart-transform"
 
 [[extensions]]
 type = "theme_app_extension"

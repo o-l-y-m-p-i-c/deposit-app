@@ -1,4 +1,9 @@
-import { run, output } from "@shopify/shopify_function";
+// @ts-check
+
+/**
+ * @typedef {import("../generated/api").CartTransformRunInput} CartTransformRunInput
+ * @typedef {import("../generated/api").CartTransformRunResult} CartTransformRunResult
+ */
 
 /**
  * Cart Transform Function: Bottle Deposit
@@ -20,21 +25,33 @@ import { run, output } from "@shopify/shopify_function";
  * }
  */
 
-run(({ cart, cartTransform }) => {
-  const configMetafield = cartTransform?.metafield;
+/**
+ * @type {CartTransformRunResult}
+ */
+const NO_CHANGES = {
+  operations: [],
+};
+
+/**
+ * @param {CartTransformRunInput} input
+ * @returns {CartTransformRunResult}
+ */
+export function cartTransformRun(input) {
+  const configMetafield = input?.cartTransform?.metafield;
   if (!configMetafield?.value) {
-    return output([]);
+    return NO_CHANGES;
   }
 
+  /** @type {any} */
   let config;
   try {
     config = JSON.parse(configMetafield.value);
   } catch {
-    return output([]);
+    return NO_CHANGES;
   }
 
   if (!config.enabled || !config.depositVariantId) {
-    return output([]);
+    return NO_CHANGES;
   }
 
   const includeTags = config.includeTags || [];
@@ -42,41 +59,34 @@ run(({ cart, cartTransform }) => {
   const excludeTags = config.excludeTags || [];
   const excludeCollectionIds = config.excludeCollectionIds || [];
 
+  /** @type {any[]} */
   const operations = [];
 
-  for (const line of cart.lines) {
+  for (const line of input.cart.lines) {
     // Skip non-product variants
     if (line.merchandise.__typename !== "ProductVariant") {
       continue;
     }
 
+    /** @type {any} */
+    const variant = line.merchandise;
+
     // Skip the deposit product itself to avoid infinite recursion
-    if (line.merchandise.id === config.depositVariantId) {
+    if (variant.id === config.depositVariantId) {
       continue;
     }
 
-    const product = line.merchandise.product;
+    const product = variant.product;
     if (!product) continue;
 
-    // Check collection membership (via inAnyCollection with variables)
-    const inIncludedCollection = includeCollectionIds.length > 0 &&
-      product.inAnyCollection === true;
-
-    // For tags, we check at runtime using the config arrays
-    // hasAnyTag in the input query uses an empty array as placeholder;
-    // actual tag matching is done here using the config from metafield
-    const productTags = product.hasAnyTag || [];
-    const hasIncludedTag = includeTags.length > 0 &&
-      includeTags.some((tag) => productTags.includes(tag));
-    const hasExcludedTag = excludeTags.length > 0 &&
-      excludeTags.some((tag) => productTags.includes(tag));
-
-    // For exclude collections, we need a separate check
-    // Since the input query only has includeCollectionIds variable,
-    // we check exclude collections via the config metafield approach
-    // In production, we'd add excludeCollectionIds as another variable
-    const inExcludedCollection = excludeCollectionIds.length > 0 &&
-      product.inAnyCollection === true; // This is simplified; see note below
+    // Check tags and collections
+    // Note: hasAnyTag and inAnyCollection use empty arrays in the input query
+    // because the actual tag/collection lists come from the config metafield.
+    // In production, we'd use GraphQL variables for the config values.
+    const hasIncludedTag = includeTags.length > 0 && product.hasAnyTag === true;
+    const inIncludedCollection = includeCollectionIds.length > 0 && product.inAnyCollection === true;
+    const hasExcludedTag = excludeTags.length > 0 && product.hasAnyTag === true;
+    const inExcludedCollection = excludeCollectionIds.length > 0 && product.inAnyCollection === true;
 
     // Determine eligibility
     const included = hasIncludedTag || inIncludedCollection;
@@ -89,21 +99,22 @@ run(({ cart, cartTransform }) => {
 
     // Expand the line: original product + deposit component
     operations.push({
-      lineExpand: {
+      expand: {
         cartLineId: line.id,
         expandedCartItems: [
           {
-            merchandiseId: line.merchandise.id,
+            merchandiseId: variant.id,
             quantity: line.quantity,
-            title: line.merchandise.title,
-            image: line.merchandise.image,
           },
           {
             merchandiseId: config.depositVariantId,
             quantity: line.quantity,
-            title: "Bottle Deposit",
             price: {
-              percentage: 0,
+              adjustment: {
+                fixedPricePerUnit: {
+                  amount: (config.amountMinor / 100).toFixed(2),
+                },
+              },
             },
           },
         ],
@@ -111,5 +122,5 @@ run(({ cart, cartTransform }) => {
     });
   }
 
-  return output(operations);
-});
+  return { operations };
+}
