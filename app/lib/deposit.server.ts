@@ -72,7 +72,7 @@ export async function createDepositProduct(shop: string, amountMinor: number, cu
   }
 
   const productId = product.id;
-  const variantId = product.defaultVariant?.id;
+  const variantId = product.variants?.edges?.[0]?.node?.id;
 
   if (!variantId) {
     throw new Error("Deposit product created but missing default variant ID");

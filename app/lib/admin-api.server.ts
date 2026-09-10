@@ -152,9 +152,13 @@ export const CREATE_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
       product {
         id
         title
-        defaultVariant {
-          id
-          price
+        variants(first: 1) {
+          edges {
+            node {
+              id
+              price
+            }
+          }
         }
       }
       userErrors {
