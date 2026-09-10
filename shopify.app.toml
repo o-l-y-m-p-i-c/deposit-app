@@ -2,7 +2,7 @@
 
 client_id = "b98cf2d141936633c42bf87902a8cc3a"
 name = "Bottle Deposit App"
-application_url = "https://deposit-app.onrender.com"
+application_url = "https://deposit-app-ey0c.onrender.com"
 embedded = true
 
 [webhooks]
@@ -27,7 +27,7 @@ optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ "https://deposit-app.onrender.com/auth/callback" ]
+redirect_urls = [ "https://deposit-app-ey0c.onrender.com/auth/callback" ]
 
 [pos]
 embedded = false
