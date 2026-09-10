@@ -3,7 +3,7 @@
  */
 
 import { prisma } from "~/db.server";
-import { adminGraphql, CREATE_DEPOSIT_PRODUCT, UPDATE_VARIANT_PRICE, UPDATE_PRODUCT_STATUS, CREATE_CART_TRANSFORM, SET_METAFIELDS } from "~/lib/admin-api.server";
+import { adminGraphql, CREATE_DEPOSIT_PRODUCT, UPDATE_DEFAULT_VARIANT_PRICE, UPDATE_VARIANT_PRICE, UPDATE_PRODUCT_STATUS, CREATE_CART_TRANSFORM, SET_METAFIELDS } from "~/lib/admin-api.server";
 
 const API_VERSION = "2026-07";
 
@@ -44,25 +44,19 @@ export async function getRulesGrouped(shopId: string) {
 /**
  * Create the hidden deposit product and return its IDs.
  * Product is set to DRAFT status so it's not visible on the storefront.
+ * Uses the new product model: create product (gets default variant), then set variant price.
  */
 export async function createDepositProduct(shop: string, amountMinor: number, currencyCode: string) {
   const price = (amountMinor / 100).toFixed(2);
 
+  // Step 1: Create the product (gets a default variant automatically)
   const result = await adminGraphql(CREATE_DEPOSIT_PRODUCT, {
     product: {
       title: "Bottle Deposit",
       productType: "Deposit",
       vendor: "Bottle Deposit App",
       status: "DRAFT",
-      variants: [
-        {
-          price,
-          sku: "BOTTLE-DEPOSIT",
-          taxable: false,
-          requiresShipping: false,
-          inventoryManagement: "NOT_MANAGED",
-        },
-      ],
+      tags: ["deposit", "bottle-deposit"],
     },
   }, shop);
 
@@ -73,12 +67,36 @@ export async function createDepositProduct(shop: string, amountMinor: number, cu
     throw new Error(`Failed to create deposit product: ${JSON.stringify(errors)}`);
   }
 
-  const variantId = product?.variants?.edges?.[0]?.node?.id;
-  if (!product?.id || !variantId) {
-    throw new Error("Deposit product created but missing IDs");
+  if (!product?.id) {
+    throw new Error("Deposit product created but missing product ID");
   }
 
-  return { productId: product.id, variantId };
+  const productId = product.id;
+  const variantId = product.defaultVariant?.id;
+
+  if (!variantId) {
+    throw new Error("Deposit product created but missing default variant ID");
+  }
+
+  // Step 2: Update the default variant's price
+  const variantResult = await adminGraphql(UPDATE_DEFAULT_VARIANT_PRICE, {
+    productId,
+    variants: [{
+      id: variantId,
+      price,
+      sku: "BOTTLE-DEPOSIT",
+      taxable: false,
+      requiresShipping: false,
+      inventoryManagement: "NOT_MANAGED",
+    }],
+  }, shop);
+
+  const variantErrors = variantResult?.data?.productVariantsBulkUpdate?.userErrors;
+  if (variantErrors?.length > 0) {
+    throw new Error(`Failed to update deposit variant: ${JSON.stringify(variantErrors)}`);
+  }
+
+  return { productId, variantId };
 }
 
 /**

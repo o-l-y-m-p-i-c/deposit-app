@@ -142,9 +142,9 @@ export async function ensureValidSession(shop: string): Promise<boolean> {
 // ─── GraphQL queries for deposit operations ─────────────────
 
 /**
- * Create a hidden deposit product with one variant.
- * Not published to Online Store channel.
- * Uses the new `product` argument (ProductCreateInput), not the deprecated `input`.
+ * Create a hidden deposit product.
+ * Uses the new product model: create product first, then variants separately.
+ * Product is set to DRAFT status so it's not visible on the storefront.
  */
 export const CREATE_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
   mutation productCreate($product: ProductCreateInput!) {
@@ -152,14 +152,28 @@ export const CREATE_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
       product {
         id
         title
-        variants(first: 1) {
-          edges {
-            node {
-              id
-              price
-            }
-          }
+        defaultVariant {
+          id
+          price
         }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
+ * Update the default variant's price after product creation.
+ */
+export const UPDATE_DEFAULT_VARIANT_PRICE = /* GraphQL */ `#graphql
+  mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants {
+        id
+        price
       }
       userErrors {
         field
