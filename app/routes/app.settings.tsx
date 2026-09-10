@@ -41,7 +41,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let availableTags: string[] = [];
   try {
     const result = await adminGraphql(GET_PRODUCT_TAGS, {}, session.shop);
-    availableTags = result?.data?.shop?.productTags?.edges?.map((e: { node: string }) => e.node) || [];
+    availableTags = result?.data?.productTags?.nodes || [];
   } catch {
     // Tags fetch is non-critical
   }

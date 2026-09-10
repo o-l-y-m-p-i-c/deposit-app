@@ -36,7 +36,7 @@ export async function adminGraphql(
     // Auto-cleanup: if the token is revoked/invalid, delete the stale
     // session so the merchant is forced through OAuth on next visit.
     if (response.status === 401 || response.status === 403) {
-      await deleteSessionsForShop(shop).catch(() => {});
+      await deleteSessionsForShop(shop).catch(() => { });
       console.warn(
         `[adminGraphql] Session for ${shop} returned ${response.status}. Deleted stale session.`,
       );
@@ -244,15 +244,12 @@ export const SET_METAFIELDS = /* GraphQL */ `#graphql
 
 /**
  * Get all product tags for autocomplete.
+ * productTags is a top-level query (not under shop), returns StringConnection.
  */
 export const GET_PRODUCT_TAGS = /* GraphQL */ `#graphql
-  query {
-    shop {
-      productTags(first: 250) {
-        edges {
-          node
-        }
-      }
+  query GetProductTags {
+    productTags(first: 250) {
+      nodes
     }
   }
 `;

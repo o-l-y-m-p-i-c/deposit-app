@@ -235,9 +235,10 @@ export async function fullSync(shop: string, shopId: string) {
     // Create deposit product if it doesn't exist
     try {
       const { productId, variantId } = await createDepositProduct(shop, settings.amountMinor, settings.currencyCode);
-      await prisma.depositSettings.update({
+      await prisma.depositSettings.upsert({
         where: { shopId },
-        data: { depositProductId: productId, depositVariantId: variantId },
+        update: { depositProductId: productId, depositVariantId: variantId },
+        create: { shopId, depositProductId: productId, depositVariantId: variantId },
       });
       await log("create_deposit_product", "success", `Product created: ${productId}`);
     } catch (e) {
@@ -275,8 +276,9 @@ export async function fullSync(shop: string, shopId: string) {
   }
 
   // 4. Update lastSyncedAt
-  await prisma.depositSettings.update({
+  await prisma.depositSettings.upsert({
     where: { shopId },
-    data: { lastSyncedAt: new Date() },
+    update: { lastSyncedAt: new Date() },
+    create: { shopId, lastSyncedAt: new Date() },
   });
 }
