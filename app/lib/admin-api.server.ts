@@ -144,10 +144,11 @@ export async function ensureValidSession(shop: string): Promise<boolean> {
 /**
  * Create a hidden deposit product with one variant.
  * Not published to Online Store channel.
+ * Uses the new `product` argument (ProductCreateInput), not the deprecated `input`.
  */
 export const CREATE_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
-  mutation productCreate($input: ProductCreateInput!) {
-    productCreate(input: $input) {
+  mutation productCreate($product: ProductCreateInput!) {
+    productCreate(product: $product) {
       product {
         id
         title

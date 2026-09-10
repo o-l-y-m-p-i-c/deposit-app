@@ -49,7 +49,7 @@ export async function createDepositProduct(shop: string, amountMinor: number, cu
   const price = (amountMinor / 100).toFixed(2);
 
   const result = await adminGraphql(CREATE_DEPOSIT_PRODUCT, {
-    input: {
+    product: {
       title: "Bottle Deposit",
       productType: "Deposit",
       vendor: "Bottle Deposit App",
