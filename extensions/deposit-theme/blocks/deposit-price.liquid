@@ -4,14 +4,11 @@
 {% endcomment %}
 
 <div class="deposit-price-display" data-deposit-block>
-  {%- assign deposit_config = app.metafields["$app:deposit"].display_config -%}
-  {%- if deposit_config != blank -%}
-    {%- assign config = deposit_config | json -%}
-    {%- if config.enabled -%}
-      <span class="deposit-price-text" style="font-size: 0.85em; color: #666;">
-        + {{ config.depositText | default: "0.10Euro per bottle" }}
-      </span>
-    {%- endif -%}
+  {%- assign config = app.metafields["$app:deposit"]["display-config"].value -%}
+  {%- if config.enabled -%}
+    <span class="deposit-price-text" style="font-size: 0.85em; color: #666;">
+      + {{ config.depositText | default: "0.10Euro per bottle" }}
+    </span>
   {%- endif -%}
 </div>
 

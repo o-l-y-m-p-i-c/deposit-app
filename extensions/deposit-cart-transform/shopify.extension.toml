@@ -16,6 +16,10 @@ description = "t:description"
   command = ""
   path = "dist/function.wasm"
 
+  [extensions.input.variables]
+  namespace = "$app:deposit"
+  key = "function-configuration"
+
   [extensions.ui.paths]
   create = "/"
   details = "/"

@@ -4,6 +4,8 @@
   Activated from Theme Settings > App embeds.
 {% endcomment %}
 
+{%- assign deposit_config = app.metafields["$app:deposit"]["display-config"].value -%}
+<script id="deposit-config" type="application/json">{{ deposit_config | json }}</script>
 <script src="{{ 'deposit-embed.js' | asset_url }}" defer></script>
 
 {% schema %}

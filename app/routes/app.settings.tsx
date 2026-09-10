@@ -20,12 +20,17 @@ import {
 } from "@shopify/polaris";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useSubmit, useFetcher } from "@remix-run/react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
 import { authenticate } from "~/shopify.server";
 import { getSettings, updateSettings } from "~/models/settings.server";
 import { getRules, addRule, removeRule } from "~/models/rules.server";
 import { fullSync } from "~/lib/deposit.server";
-import { adminGraphql, GET_PRODUCT_TAGS, GET_COLLECTIONS } from "~/lib/admin-api.server";
+import {
+  adminGraphql,
+  GET_COLLECTIONS,
+  GET_CURRENT_APP_INSTALLATION,
+  GET_PRODUCT_TAGS,
+} from "~/lib/admin-api.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -78,14 +83,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 }
 
-async function getShopId(admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"]): Promise<string | null> {
-  try {
-    const response = await admin.graphql(`#graphql\nquery { shop { id } }`);
-    const data = await response.json();
-    return data?.data?.shop?.id ?? null;
-  } catch {
-    return null;
-  }
+async function getAppInstallationId(
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
+): Promise<string> {
+  const response = await admin.graphql(GET_CURRENT_APP_INSTALLATION);
+  const data = await response.json();
+  const id = data?.data?.currentAppInstallation?.id;
+  if (!id) throw new Error("Current app installation ID is unavailable");
+  return id;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -104,15 +109,14 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Trigger full sync
     try {
-      const shopId = await getShopId(admin);
-      if (shopId) {
-        await fullSync(session.shop, shopId);
-      }
+      const appInstallationId = await getAppInstallationId(admin);
+      await fullSync(session.shop, appInstallationId);
     } catch (e) {
       console.error("[action updateSettings] Sync failed:", e);
+      return json({ error: String(e) }, { status: 500 });
     }
 
-    return json({ success: true });
+    return json({ success: true, message: "Settings saved and synced" });
   }
 
   if (intent === "addRule") {
@@ -134,15 +138,14 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Trigger full sync
     try {
-      const shopId = await getShopId(admin);
-      if (shopId) {
-        await fullSync(session.shop, shopId);
-      }
+      const appInstallationId = await getAppInstallationId(admin);
+      await fullSync(session.shop, appInstallationId);
     } catch (e) {
       console.error("[action addRule] Sync failed:", e);
+      return json({ error: String(e) }, { status: 500 });
     }
 
-    return json({ success: true });
+    return json({ success: true, message: "Rule added and synced" });
   }
 
   if (intent === "removeRule") {
@@ -155,24 +158,21 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Trigger full sync
     try {
-      const shopId = await getShopId(admin);
-      if (shopId) {
-        await fullSync(session.shop, shopId);
-      }
+      const appInstallationId = await getAppInstallationId(admin);
+      await fullSync(session.shop, appInstallationId);
     } catch (e) {
       console.error("[action removeRule] Sync failed:", e);
+      return json({ error: String(e) }, { status: 500 });
     }
 
-    return json({ success: true });
+    return json({ success: true, message: "Rule removed and synced" });
   }
 
   if (intent === "sync") {
     try {
-      const shopId = await getShopId(admin);
-      if (shopId) {
-        await fullSync(session.shop, shopId);
-      }
-      return json({ success: true });
+      const appInstallationId = await getAppInstallationId(admin);
+      await fullSync(session.shop, appInstallationId);
+      return json({ success: true, message: "Sync complete" });
     } catch (e) {
       return json({ error: String(e) }, { status: 500 });
     }
@@ -183,7 +183,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
 export default function SettingsPage() {
   const data = useLoaderData<typeof loader>();
-  const submit = useSubmit();
   const fetcher = useFetcher();
 
   const [enabled, setEnabled] = useState(data.settings.enabled);
@@ -207,12 +206,11 @@ export default function SettingsPage() {
       setToastMessage("Invalid amount");
       return;
     }
-    submit(
+    fetcher.submit(
       { intent: "updateSettings", enabled: String(enabled), amountMinor: String(amountMinor) },
       { method: "post" },
     );
-    setToastMessage("Settings saved and synced");
-  }, [amountEuros, enabled, submit]);
+  }, [amountEuros, enabled, fetcher]);
 
   const handleAddRule = useCallback(() => {
     let value = "";
@@ -232,7 +230,7 @@ export default function SettingsPage() {
 
     if (!value) return;
 
-    submit(
+    fetcher.submit(
       {
         intent: "addRule",
         effect: newRuleEffect,
@@ -246,13 +244,11 @@ export default function SettingsPage() {
     setShowAddModal(false);
     setNewRuleTagValue("");
     setNewRuleCollectionId("");
-    setToastMessage("Rule added and synced");
-  }, [newRuleType, newRuleTagValue, newRuleCollectionId, newRuleEffect, data.collections, submit]);
+  }, [newRuleType, newRuleTagValue, newRuleCollectionId, newRuleEffect, data.collections, fetcher]);
 
   const handleRemoveRule = useCallback((ruleId: number) => {
-    submit({ intent: "removeRule", ruleId: String(ruleId) }, { method: "post" });
-    setToastMessage("Rule removed and synced");
-  }, [submit]);
+    fetcher.submit({ intent: "removeRule", ruleId: String(ruleId) }, { method: "post" });
+  }, [fetcher]);
 
   const handleSync = useCallback(() => {
     setSyncing(true);
@@ -261,10 +257,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
-      const data = fetcher.data as { success?: boolean; error?: string };
+      const data = fetcher.data as { success?: boolean; error?: string; message?: string };
       setSyncing(false);
       if (data.success) {
-        setToastMessage("Sync complete");
+        setToastMessage(data.message || "Sync complete");
       } else if (data.error) {
         setToastMessage(`Sync error: ${data.error}`);
       }

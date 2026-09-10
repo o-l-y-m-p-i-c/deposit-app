@@ -3,9 +3,18 @@
  */
 
 import { prisma } from "~/db.server";
-import { adminGraphql, CREATE_DEPOSIT_PRODUCT, UPDATE_DEFAULT_VARIANT_PRICE, UPDATE_VARIANT_PRICE, UPDATE_PRODUCT_STATUS, CREATE_CART_TRANSFORM, SET_METAFIELDS } from "~/lib/admin-api.server";
+import {
+  adminGraphql,
+  CREATE_CART_TRANSFORM,
+  CREATE_DEPOSIT_PRODUCT,
+  GET_CART_TRANSFORMS,
+  GET_DEPOSIT_PRODUCT,
+  SET_METAFIELDS,
+  UPDATE_DEPOSIT_VARIANT,
+  UPDATE_PRODUCT_STATUS,
+} from "~/lib/admin-api.server";
 
-const API_VERSION = "2026-07";
+const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
 
 /**
  * Get or create default settings for a shop.
@@ -42,102 +51,92 @@ export async function getRulesGrouped(shopId: string) {
 }
 
 /**
- * Create the hidden deposit product and return its IDs.
- * Product is set to DRAFT status so it's not visible on the storefront.
- * Uses the new product model: create product (gets default variant), then set variant price.
+ * Find or create the deposit product and configure its default variant.
  */
-export async function createDepositProduct(shop: string, amountMinor: number, currencyCode: string) {
-  const price = (amountMinor / 100).toFixed(2);
+export async function createDepositProduct(shop: string, amountMinor: number) {
+  const existingResult = await adminGraphql(GET_DEPOSIT_PRODUCT, {}, shop);
+  let product = existingResult?.data?.products?.nodes?.[0];
 
-  // Step 1: Create the product (gets a default variant automatically)
-  const result = await adminGraphql(CREATE_DEPOSIT_PRODUCT, {
-    product: {
-      title: "Bottle Deposit",
-      productType: "Deposit",
-      vendor: "Bottle Deposit App",
-      status: "DRAFT",
-      tags: ["deposit", "bottle-deposit"],
-    },
-  }, shop);
-
-  const product = result?.data?.productCreate?.product;
-  const errors = result?.data?.productCreate?.userErrors;
-
-  if (errors?.length > 0) {
-    throw new Error(`Failed to create deposit product: ${JSON.stringify(errors)}`);
+  if (!product) {
+    const createResult = await adminGraphql(CREATE_DEPOSIT_PRODUCT, {
+      product: {
+        title: "Bottle Deposit",
+        productType: "Deposit",
+        vendor: "Bottle Deposit App",
+        status: "ACTIVE",
+        tags: ["deposit", "bottle-deposit"],
+      },
+    }, shop);
+    const errors = createResult?.data?.productCreate?.userErrors;
+    if (errors?.length > 0) {
+      throw new Error(`Failed to create deposit product: ${JSON.stringify(errors)}`);
+    }
+    product = createResult?.data?.productCreate?.product;
+  } else if (product.status !== "ACTIVE") {
+    const statusResult = await adminGraphql(UPDATE_PRODUCT_STATUS, {
+      product: { id: product.id, status: "ACTIVE" },
+    }, shop);
+    const errors = statusResult?.data?.productUpdate?.userErrors;
+    if (errors?.length > 0) {
+      throw new Error(`Failed to activate deposit product: ${JSON.stringify(errors)}`);
+    }
   }
 
-  if (!product?.id) {
-    throw new Error("Deposit product created but missing product ID");
+  const productId = product?.id;
+  const variantId = product?.variants?.nodes?.[0]?.id;
+  if (!productId || !variantId) {
+    throw new Error("Deposit product is missing a product or variant ID");
   }
 
-  const productId = product.id;
-  const variantId = product.variants?.edges?.[0]?.node?.id;
-
-  if (!variantId) {
-    throw new Error("Deposit product created but missing default variant ID");
-  }
-
-  // Step 2: Update the default variant's price
-  const variantResult = await adminGraphql(UPDATE_DEFAULT_VARIANT_PRICE, {
-    productId,
-    variants: [{
-      id: variantId,
-      price,
-      sku: "BOTTLE-DEPOSIT",
-      taxable: false,
-      requiresShipping: false,
-      inventoryManagement: "NOT_MANAGED",
-    }],
-  }, shop);
-
-  const variantErrors = variantResult?.data?.productVariantsBulkUpdate?.userErrors;
-  if (variantErrors?.length > 0) {
-    throw new Error(`Failed to update deposit variant: ${JSON.stringify(variantErrors)}`);
-  }
-
+  await updateDepositPrice(shop, productId, variantId, amountMinor);
   return { productId, variantId };
 }
 
 /**
- * Update the deposit variant price when settings change.
+ * Update price, SKU, tax, tracking, and shipping settings on the deposit variant.
  */
-export async function updateDepositPrice(shop: string, variantId: string, amountMinor: number) {
-  const price = (amountMinor / 100).toFixed(2);
-
-  const result = await adminGraphql(UPDATE_VARIANT_PRICE, {
-    input: {
+export async function updateDepositPrice(
+  shop: string,
+  productId: string,
+  variantId: string,
+  amountMinor: number,
+) {
+  const result = await adminGraphql(UPDATE_DEPOSIT_VARIANT, {
+    productId,
+    variants: [{
       id: variantId,
-      price,
-    },
+      price: (amountMinor / 100).toFixed(2),
+      taxable: false,
+      inventoryItem: {
+        sku: "BOTTLE-DEPOSIT",
+        tracked: false,
+        requiresShipping: false,
+      },
+    }],
   }, shop);
-
-  const errors = result?.data?.productVariantUpdate?.userErrors;
+  const errors = result?.data?.productVariantsBulkUpdate?.userErrors;
   if (errors?.length > 0) {
-    throw new Error(`Failed to update deposit price: ${JSON.stringify(errors)}`);
+    throw new Error(`Failed to update deposit variant: ${JSON.stringify(errors)}`);
   }
-
-  return result?.data?.productVariantUpdate?.productVariant;
+  return result?.data?.productVariantsBulkUpdate?.productVariants?.[0];
 }
 
-/**
- * Create the Cart Transform Function and link it to the deposit variant.
- */
-export async function createCartTransform(shop: string, functionId: string) {
-  const result = await adminGraphql(CREATE_CART_TRANSFORM, {
-    input: {
-      functionId,
-      title: "Bottle Deposit",
-    },
-  }, shop);
+export async function createCartTransform(shop: string) {
+  const existingResult = await adminGraphql(GET_CART_TRANSFORMS, {}, shop);
+  const existing = existingResult?.data?.cartTransforms?.nodes?.[0];
+  if (existing) return existing;
 
+  const result = await adminGraphql(CREATE_CART_TRANSFORM, {
+    functionHandle: CART_TRANSFORM_HANDLE,
+  }, shop);
   const cartTransform = result?.data?.cartTransformCreate?.cartTransform;
   const errors = result?.data?.cartTransformCreate?.userErrors;
-
   if (errors?.length > 0) {
     throw new Error(`Failed to create cart transform: ${JSON.stringify(errors)}`);
   }
-
+  if (!cartTransform?.id) {
+    throw new Error("Cart Transform was created without an ID");
+  }
   return cartTransform;
 }
 
@@ -235,68 +234,70 @@ export async function syncStorefrontMetafield(
 /**
  * Full sync: update deposit price, sync metafields.
  */
-export async function fullSync(shop: string, shopId: string) {
-  const settings = await getOrCreateSettings(shop);
-  const rules = await getRulesGrouped(shop);
+export async function fullSync(shop: string, appInstallationId: string) {
+  let settings = await getOrCreateSettings(shop);
   const log = (operation: string, status: string, message: string) =>
     prisma.syncLog.create({ data: { shopId: shop, operation, status, message } });
 
-  // 1. Update deposit variant price
-  if (settings.depositVariantId) {
-    try {
-      await updateDepositPrice(shop, settings.depositVariantId, settings.amountMinor);
-      await log("update_deposit_price", "success", `Price updated to ${settings.amountMinor} cents`);
-    } catch (e) {
-      await log("update_deposit_price", "error", String(e));
-    }
-  } else {
-    // Create deposit product if it doesn't exist
-    try {
-      const { productId, variantId } = await createDepositProduct(shop, settings.amountMinor, settings.currencyCode);
-      await prisma.depositSettings.upsert({
-        where: { shopId },
-        update: { depositProductId: productId, depositVariantId: variantId },
-        create: { shopId, depositProductId: productId, depositVariantId: variantId },
-      });
-      await log("create_deposit_product", "success", `Product created: ${productId}`);
-    } catch (e) {
-      await log("create_deposit_product", "error", String(e));
-    }
-  }
-
-  // 2. Sync Cart Transform metafield
-  if (settings.cartTransformId) {
-    try {
-      const updatedSettings = await getOrCreateSettings(shop);
-      const updatedRules = await getRulesGrouped(shop);
-      await syncCartTransformMetafield(shop, settings.cartTransformId, {
-        enabled: updatedSettings.enabled,
-        amountMinor: updatedSettings.amountMinor,
-        currencyCode: updatedSettings.currencyCode,
-        depositVariantId: updatedSettings.depositVariantId,
-      }, updatedRules);
-      await log("sync_metafields", "success", "Cart Transform metafield synced");
-    } catch (e) {
-      await log("sync_metafields", "error", String(e));
-    }
-  }
-
-  // 3. Sync storefront metafield
   try {
-    await syncStorefrontMetafield(shop, shopId, {
+    let productId = settings.depositProductId;
+    let variantId = settings.depositVariantId;
+    if (productId && variantId) {
+      await updateDepositPrice(shop, productId, variantId, settings.amountMinor);
+      await log("update_deposit_price", "success", `Price updated to ${settings.amountMinor} cents`);
+    } else {
+      ({ productId, variantId } = await createDepositProduct(shop, settings.amountMinor));
+      await log("create_deposit_product", "success", `Product ready: ${productId}`);
+    }
+    settings = await prisma.depositSettings.update({
+      where: { shopId: shop },
+      data: { depositProductId: productId, depositVariantId: variantId },
+    });
+  } catch (error) {
+    await log("sync_deposit_product", "error", String(error));
+    throw error;
+  }
+
+  try {
+    let cartTransformId = settings.cartTransformId;
+    if (!cartTransformId) {
+      const cartTransform = await createCartTransform(shop);
+      cartTransformId = cartTransform.id;
+      settings = await prisma.depositSettings.update({
+        where: { shopId: shop },
+        data: { cartTransformId },
+      });
+      await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
+    }
+    if (!cartTransformId) throw new Error("Cart Transform ID is unavailable");
+    const rules = await getRulesGrouped(shop);
+    await syncCartTransformMetafield(shop, cartTransformId, {
+      enabled: settings.enabled,
+      amountMinor: settings.amountMinor,
+      currencyCode: settings.currencyCode,
+      depositVariantId: settings.depositVariantId,
+    }, rules);
+    await log("sync_metafields", "success", "Cart Transform metafield synced");
+  } catch (error) {
+    await log("sync_cart_transform", "error", String(error));
+    throw error;
+  }
+
+  try {
+    await syncStorefrontMetafield(shop, appInstallationId, {
       enabled: settings.enabled,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
     });
     await log("sync_storefront", "success", "Storefront metafield synced");
-  } catch (e) {
-    await log("sync_storefront", "error", String(e));
+  } catch (error) {
+    await log("sync_storefront", "error", String(error));
+    throw error;
   }
 
-  // 4. Update lastSyncedAt
-  await prisma.depositSettings.upsert({
-    where: { shopId },
-    update: { lastSyncedAt: new Date() },
-    create: { shopId, lastSyncedAt: new Date() },
+  settings = await prisma.depositSettings.update({
+    where: { shopId: shop },
+    data: { lastSyncedAt: new Date() },
   });
+  return settings;
 }

@@ -2,6 +2,49 @@ import path from "path";
 import fs from "fs";
 import { describe, beforeAll, test, expect } from "vitest";
 import { buildFunction, getFunctionInfo, loadSchema, loadInputQuery, loadFixture, validateTestAssets, runFunction } from "@shopify/shopify-function-test-helpers";
+import { cartTransformRun } from "../src/cart_transform_run.js";
+
+const input = (overrides = {}) => ({
+  cart: {
+    lines: [{
+      id: "gid://shopify/CartLine/1",
+      quantity: 3,
+      merchandise: {
+        __typename: "ProductVariant",
+        id: "gid://shopify/ProductVariant/1",
+        product: {
+          hasIncludedTag: true,
+          inIncludedCollection: false,
+          hasExcludedTag: false,
+          inExcludedCollection: false,
+          ...overrides,
+        },
+      },
+    }],
+  },
+  cartTransform: {
+    metafield: {
+      value: JSON.stringify({
+        enabled: true,
+        depositVariantId: "gid://shopify/ProductVariant/2",
+      }),
+    },
+  },
+});
+
+describe("Deposit rules", () => {
+  test("adds one deposit component per source item", () => {
+    const result = cartTransformRun(input());
+    expect(result.operations[0].lineExpand.expandedCartItems).toEqual([
+      { merchandiseId: "gid://shopify/ProductVariant/1", quantity: 1 },
+      { merchandiseId: "gid://shopify/ProductVariant/2", quantity: 1 },
+    ]);
+  });
+
+  test("exclusions override inclusions", () => {
+    expect(cartTransformRun(input({ hasExcludedTag: true }))).toEqual({ operations: [] });
+  });
+});
 
 describe("Default Integration Test", () => {
   let schema;

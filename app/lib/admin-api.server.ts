@@ -142,22 +142,36 @@ export async function ensureValidSession(shop: string): Promise<boolean> {
 // ─── GraphQL queries for deposit operations ─────────────────
 
 /**
- * Create a hidden deposit product.
- * Uses the new product model: create product first, then variants separately.
- * Product is set to DRAFT status so it's not visible on the storefront.
+ * Find an existing deposit product so retries don't create duplicates.
+ */
+export const GET_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
+  query GetDepositProduct {
+    products(first: 1, query: "tag:bottle-deposit") {
+      nodes {
+        id
+        status
+        variants(first: 1) {
+          nodes {
+            id
+            price
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Create the hidden deposit product with its automatically generated variant.
  */
 export const CREATE_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
-  mutation productCreate($product: ProductCreateInput!) {
+  mutation CreateDepositProduct($product: ProductCreateInput!) {
     productCreate(product: $product) {
       product {
         id
-        title
         variants(first: 1) {
-          edges {
-            node {
-              id
-              price
-            }
+          nodes {
+            id
           }
         }
       }
@@ -170,10 +184,10 @@ export const CREATE_DEPOSIT_PRODUCT = /* GraphQL */ `#graphql
 `;
 
 /**
- * Update the default variant's price after product creation.
+ * Update the deposit variant using the current product model.
  */
-export const UPDATE_DEFAULT_VARIANT_PRICE = /* GraphQL */ `#graphql
-  mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+export const UPDATE_DEPOSIT_VARIANT = /* GraphQL */ `#graphql
+  mutation UpdateDepositVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
     productVariantsBulkUpdate(productId: $productId, variants: $variants) {
       productVariants {
         id
@@ -188,29 +202,11 @@ export const UPDATE_DEFAULT_VARIANT_PRICE = /* GraphQL */ `#graphql
 `;
 
 /**
- * Update the price of the deposit variant.
- */
-export const UPDATE_VARIANT_PRICE = /* GraphQL */ `#graphql
-  mutation productVariantUpdate($input: ProductVariantInput!) {
-    productVariantUpdate(input: $input) {
-      productVariant {
-        id
-        price
-      }
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
-
-/**
- * Update product status (e.g., set to DRAFT to hide from storefront).
+ * Activate an existing deposit product recovered after a failed sync.
  */
 export const UPDATE_PRODUCT_STATUS = /* GraphQL */ `#graphql
-  mutation productUpdate($input: ProductInput!) {
-    productUpdate(input: $input) {
+  mutation UpdateDepositProductStatus($product: ProductUpdateInput!) {
+    productUpdate(product: $product) {
       product {
         id
         status
@@ -224,19 +220,40 @@ export const UPDATE_PRODUCT_STATUS = /* GraphQL */ `#graphql
 `;
 
 /**
- * Create a Cart Transform Function.
+ * Find an existing app-owned Cart Transform before creating one.
+ */
+export const GET_CART_TRANSFORMS = /* GraphQL */ `#graphql
+  query GetCartTransforms {
+    cartTransforms(first: 10) {
+      nodes {
+        id
+        functionId
+      }
+    }
+  }
+`;
+
+/**
+ * Create a Cart Transform linked by the deployed Function handle.
  */
 export const CREATE_CART_TRANSFORM = /* GraphQL */ `#graphql
-  mutation cartTransformCreate($input: CartTransformCreateInput!) {
-    cartTransformCreate(input: $input) {
+  mutation CreateCartTransform($functionHandle: String!) {
+    cartTransformCreate(functionHandle: $functionHandle, blockOnFailure: false) {
       cartTransform {
         id
-        metafield
       }
       userErrors {
         field
         message
       }
+    }
+  }
+`;
+
+export const GET_CURRENT_APP_INSTALLATION = /* GraphQL */ `#graphql
+  query GetCurrentAppInstallation {
+    currentAppInstallation {
+      id
     }
   }
 `;

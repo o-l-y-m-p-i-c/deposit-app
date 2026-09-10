@@ -54,11 +54,6 @@ export function cartTransformRun(input) {
     return NO_CHANGES;
   }
 
-  const includeTags = config.includeTags || [];
-  const includeCollectionIds = config.includeCollectionIds || [];
-  const excludeTags = config.excludeTags || [];
-  const excludeCollectionIds = config.excludeCollectionIds || [];
-
   /** @type {any[]} */
   const operations = [];
 
@@ -79,18 +74,12 @@ export function cartTransformRun(input) {
     const product = variant.product;
     if (!product) continue;
 
-    // Check tags and collections
-    // Note: hasAnyTag and inAnyCollection use empty arrays in the input query
-    // because the actual tag/collection lists come from the config metafield.
-    // In production, we'd use GraphQL variables for the config values.
-    const hasIncludedTag = includeTags.length > 0 && product.hasAnyTag === true;
-    const inIncludedCollection = includeCollectionIds.length > 0 && product.inAnyCollection === true;
-    const hasExcludedTag = excludeTags.length > 0 && product.hasAnyTag === true;
-    const inExcludedCollection = excludeCollectionIds.length > 0 && product.inAnyCollection === true;
-
-    // Determine eligibility
-    const included = hasIncludedTag || inIncludedCollection;
-    const excluded = hasExcludedTag || inExcludedCollection;
+    // Check tags and collections using values loaded from the owner metafield.
+    // Each aliased field is evaluated independently by Shopify's input query.
+    // Missing or empty rule arrays evaluate to false.
+    // Exclusion fields remain separate from inclusion fields.
+    const included = product.hasIncludedTag || product.inIncludedCollection;
+    const excluded = product.hasExcludedTag || product.inExcludedCollection;
 
     // Exclusions always win
     if (!included || excluded) {
@@ -99,23 +88,16 @@ export function cartTransformRun(input) {
 
     // Expand the line: original product + deposit component
     operations.push({
-      expand: {
+      lineExpand: {
         cartLineId: line.id,
         expandedCartItems: [
           {
             merchandiseId: variant.id,
-            quantity: line.quantity,
+            quantity: 1,
           },
           {
             merchandiseId: config.depositVariantId,
-            quantity: line.quantity,
-            price: {
-              adjustment: {
-                fixedPricePerUnit: {
-                  amount: (config.amountMinor / 100).toFixed(2),
-                },
-              },
-            },
+            quantity: 1,
           },
         ],
       },
