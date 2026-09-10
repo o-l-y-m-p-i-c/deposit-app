@@ -1,0 +1,43 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "b98cf2d141936633c42bf87902a8cc3a"
+name = "Bottle Deposit App"
+application_url = "https://deposit-app.onrender.com"
+embedded = true
+
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app-uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products-update"
+  topics = [ "products/update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/collections-update"
+  topics = [ "collections/update" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,write_products,write_cart_transforms,read_metaobjects,write_metaobjects,read_orders,read_themes"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://deposit-app.onrender.com/auth/callback" ]
+
+[pos]
+embedded = false
+
+[[extensions]]
+type = "function"
+name = "Deposit Cart Transform"
+path = "extensions/cart-transform"
+
+[[extensions]]
+type = "theme_app_extension"
+name = "Deposit Price Display"
+path = "extensions/deposit-theme"

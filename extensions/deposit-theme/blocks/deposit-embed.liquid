@@ -1,0 +1,15 @@
+{% comment %}
+  Deposit app embed block — injects the deposit price script globally.
+  This script finds price elements on the storefront and appends deposit text.
+  Activated from Theme Settings > App embeds.
+{% endcomment %}
+
+<script src="{{ 'deposit-embed.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Deposit Price Display",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}

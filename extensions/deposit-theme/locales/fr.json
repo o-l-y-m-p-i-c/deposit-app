@@ -1,0 +1,8 @@
+{
+  "deposit_price": {
+    "name": "Prix de consigne"
+  },
+  "deposit_embed": {
+    "name": "Affichage du prix de consigne"
+  }
+}

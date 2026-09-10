@@ -1,0 +1,80 @@
+// Prisma schema for Bottle Deposit App
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Shopify OAuth sessions (required by @shopify/shopify-app-session-storage-prisma)
+model Session {
+  id               String   @id
+  shop             String
+  state            String
+  isOnline         Boolean  @default(false)
+  scope            String?
+  expires          DateTime?
+  expiresAt        DateTime?
+  accessToken      String
+  userId           BigInt?
+  firstName        String?
+  lastName         String?
+  email            String?
+  accountOwner     Boolean?
+  locale           String?
+  collaborator     Boolean?
+  emailVerified    Boolean?
+  onlineAccessInfo Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([shop])
+}
+
+// App settings per shop
+model DepositSettings {
+  id                Int      @id @default(autoincrement())
+  shopId            String   @unique
+  enabled           Boolean  @default(true)
+  amountMinor       Int      @default(10) // in cents (10 = 0.10 EUR)
+  currencyCode      String   @default("EUR")
+  depositProductId  String?  // Shopify product GID
+  depositVariantId  String?  // Shopify variant GID
+  cartTransformId   String?  // Shopify cart transform GID
+  bottleCountMode   String   @default("single") // "single" | "metafield"
+  bottleCountKey    String?  // metafield key for bottle count, e.g. "bottles_per_unit"
+  lastSyncedAt      DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Deposit rules — include or exclude by tag or collection
+model DepositRule {
+  id           Int      @id @default(autoincrement())
+  shopId       String
+  effect       String   // "INCLUDE" | "EXCLUDE"
+  resourceType String   // "TAG" | "COLLECTION"
+  resourceId   String?  // GraphQL ID for collections, null for tags
+  value        String   // normalized tag text or collection title
+  label        String   // display name
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([shopId])
+  @@unique([shopId, effect, resourceType, value])
+}
+
+// Sync log — track configuration sync operations
+model SyncLog {
+  id        Int      @id @default(autoincrement())
+  shopId    String
+  operation String   // "create_deposit_product" | "update_deposit_price" | "create_cart_transform" | "sync_metafields" | etc.
+  status    String   // "success" | "error"
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([shopId])
+}

@@ -1,0 +1,12 @@
+{
+  "name": "deposit-cart-transform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@shopify/shopify_function": "^2.0.1"
+  }
+}

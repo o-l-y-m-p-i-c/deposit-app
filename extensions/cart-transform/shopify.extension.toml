@@ -1,0 +1,10 @@
+[build]
+command = "npm run build"
+path = "dist"
+
+[build.dependencies]
+module = "npm"
+
+[input]
+query = "src/input.graphql"
+variables = "$app:deposit.function-configuration"

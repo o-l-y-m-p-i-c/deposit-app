@@ -1,0 +1,29 @@
+{% comment %}
+  Deposit price block — shows "{{ price }} + 0.10Euro per bottle" next to product price.
+  Add this block to the product page section in the theme editor.
+{% endcomment %}
+
+<div class="deposit-price-display" data-deposit-block>
+  {%- assign deposit_config = app.metafields["$app:deposit"].display_config -%}
+  {%- if deposit_config != blank -%}
+    {%- assign config = deposit_config | json -%}
+    {%- if config.enabled -%}
+      <span class="deposit-price-text" style="font-size: 0.85em; color: #666;">
+        + {{ config.depositText | default: "0.10Euro per bottle" }}
+      </span>
+    {%- endif -%}
+  {%- endif -%}
+</div>
+
+{% schema %}
+{
+  "name": "Deposit Price",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["product"]
+  },
+  "settings": [],
+  "javascript": "deposit-price.js",
+  "stylesheet": "deposit-price.css"
+}
+{% endschema %}

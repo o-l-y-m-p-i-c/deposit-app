@@ -1,0 +1,8 @@
+{
+  "deposit_price": {
+    "name": "Deposit Price"
+  },
+  "deposit_embed": {
+    "name": "Deposit Price Display"
+  }
+}
