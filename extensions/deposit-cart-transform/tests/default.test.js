@@ -5,10 +5,16 @@ import { buildFunction, getFunctionInfo, loadSchema, loadInputQuery, loadFixture
 import { cartTransformRun } from "../src/cart_transform_run.js";
 
 const input = (overrides = {}) => ({
+  presentmentCurrencyRate: "1.00",
   cart: {
     lines: [{
       id: "gid://shopify/CartLine/1",
       quantity: 3,
+      cost: {
+        amountPerQuantity: {
+          amount: "10.00",
+        },
+      },
       merchandise: {
         __typename: "ProductVariant",
         id: "gid://shopify/ProductVariant/1",
@@ -26,6 +32,7 @@ const input = (overrides = {}) => ({
     metafield: {
       value: JSON.stringify({
         enabled: true,
+        amountMinor: 10,
         depositVariantId: "gid://shopify/ProductVariant/2",
       }),
     },
@@ -36,9 +43,26 @@ describe("Deposit rules", () => {
   test("adds one deposit component per source item", () => {
     const result = cartTransformRun(input());
     expect(result.operations[0].lineExpand.expandedCartItems).toEqual([
-      { merchandiseId: "gid://shopify/ProductVariant/1", quantity: 1 },
-      { merchandiseId: "gid://shopify/ProductVariant/2", quantity: 1 },
+      {
+        merchandiseId: "gid://shopify/ProductVariant/1",
+        quantity: 1,
+        price: { adjustment: { fixedPricePerUnit: { amount: "10.00" } } },
+      },
+      {
+        merchandiseId: "gid://shopify/ProductVariant/2",
+        quantity: 1,
+        price: { adjustment: { fixedPricePerUnit: { amount: "0.10" } } },
+      },
     ]);
+  });
+
+  test("converts the deposit into presentment currency", () => {
+    const convertedInput = input();
+    convertedInput.presentmentCurrencyRate = "1.20";
+    const result = cartTransformRun(convertedInput);
+    expect(
+      result.operations[0].lineExpand.expandedCartItems[1].price.adjustment.fixedPricePerUnit.amount,
+    ).toBe("0.12");
   });
 
   test("exclusions override inclusions", () => {

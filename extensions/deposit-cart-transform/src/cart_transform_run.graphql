@@ -4,10 +4,16 @@ query CartTransformRunInput(
   $excludeTags: [String!]
   $excludeCollectionIds: [ID!]
 ) {
+  presentmentCurrencyRate
   cart {
     lines {
       id
       quantity
+      cost {
+        amountPerQuantity {
+          amount
+        }
+      }
       merchandise {
         __typename
         ... on ProductVariant {

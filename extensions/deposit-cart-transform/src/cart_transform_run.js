@@ -50,9 +50,17 @@ export function cartTransformRun(input) {
     return NO_CHANGES;
   }
 
-  if (!config.enabled || !config.depositVariantId) {
+  const amountMinor = Number(config.amountMinor);
+  const presentmentCurrencyRate = Number(input.presentmentCurrencyRate);
+  if (
+    !config.enabled ||
+    !config.depositVariantId ||
+    !Number.isFinite(amountMinor) ||
+    !Number.isFinite(presentmentCurrencyRate)
+  ) {
     return NO_CHANGES;
   }
+  const depositAmount = ((amountMinor / 100) * presentmentCurrencyRate).toFixed(2);
 
   /** @type {any[]} */
   const operations = [];
@@ -94,10 +102,24 @@ export function cartTransformRun(input) {
           {
             merchandiseId: variant.id,
             quantity: 1,
+            price: {
+              adjustment: {
+                fixedPricePerUnit: {
+                  amount: line.cost.amountPerQuantity.amount,
+                },
+              },
+            },
           },
           {
             merchandiseId: config.depositVariantId,
             quantity: 1,
+            price: {
+              adjustment: {
+                fixedPricePerUnit: {
+                  amount: depositAmount,
+                },
+              },
+            },
           },
         ],
       },
