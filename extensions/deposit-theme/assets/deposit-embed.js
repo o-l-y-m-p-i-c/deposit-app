@@ -2,22 +2,26 @@
  * Deposit Price Display — Storefront Script
  *
  * Finds price elements on the storefront and appends deposit text
- * in the format: "{{ price }} + 0.10Euro per bottle"
+ * in the format: "+ 0.10Euro per bottle"
  *
- * Reads configuration from the app's metafield via the Liquid block,
- * or falls back to a fetch to the app proxy if needed.
+ * Only shows deposit text on eligible products (matching include tags,
+ * not matching exclude tags).
+ *
+ * Works on:
+ * - Product pages: reads product tags from #deposit-product-tags
+ * - Product cards (collection/search pages): fetches product tags via
+ *   /products/{handle}.js and caches results
  */
 
 (function () {
   "use strict";
 
-  // Configuration is injected from the Liquid block via data attribute
-  const depositBlock = document.querySelector("[data-deposit-block]");
   const configScript = document.getElementById("deposit-config");
-
   let config = {
     enabled: false,
     depositText: "0.10Euro per bottle",
+    includeTags: [],
+    excludeTags: [],
   };
 
   if (configScript) {
@@ -30,6 +34,24 @@
 
   if (!config.enabled) return;
 
+  const includeTags = (config.includeTags || []).map((t) => t.toLowerCase());
+  const excludeTags = (config.excludeTags || []).map((t) => t.toLowerCase());
+
+  // Cache of product handle -> tags (fetched via /products/{handle}.js)
+  const tagCache = new Map();
+
+  /**
+   * Check if a product is eligible for deposit based on its tags.
+   * Must match at least one include tag and no exclude tags.
+   */
+  function isEligible(tags) {
+    if (!Array.isArray(tags)) return false;
+    const lower = tags.map((t) => t.toLowerCase());
+    const included = includeTags.some((t) => lower.includes(t));
+    const excluded = excludeTags.some((t) => lower.includes(t));
+    return included && !excluded;
+  }
+
   /**
    * Append deposit text after a price element.
    * Avoids duplicate appends.
@@ -39,7 +61,8 @@
 
     const depositSpan = document.createElement("span");
     depositSpan.className = "deposit-price-text";
-    depositSpan.style.cssText = "font-size: 0.85em; color: #666; margin-left: 4px; display: inline;";
+    depositSpan.style.cssText =
+      "font-size: 0.85em; color: #666; margin-left: 4px; display: inline;";
     depositSpan.textContent = " + " + config.depositText;
 
     priceElement.appendChild(depositSpan);
@@ -47,24 +70,104 @@
   }
 
   /**
-   * Find and update all price elements on the page.
-   * Targets common Dawn/OS 2.0 price classes.
+   * Update prices on a product page.
+   * Product tags are available from #deposit-product-tags (injected by Liquid).
+   */
+  function updateProductPage() {
+    const tagsScript = document.getElementById("deposit-product-tags");
+    if (!tagsScript) return;
+
+    let productTags;
+    try {
+      productTags = JSON.parse(tagsScript.textContent);
+    } catch (e) {
+      return;
+    }
+
+    if (!isEligible(productTags)) return;
+
+    document
+      .querySelectorAll(
+        ".price__regular .price-item, .price-item--regular, .product__price .price-item, .product-single__price",
+      )
+      .forEach(appendDepositText);
+  }
+
+  /**
+   * Update prices on product cards (collection pages, search results).
+   * Fetches product tags via /products/{handle}.js for each unique card.
+   */
+  function updateProductCards() {
+    // Find all product card links
+    const cardLinks = document.querySelectorAll(
+      'a[href*="/products/"]',
+    );
+
+    // Map of price container -> product handle
+    const cardsToUpdate = [];
+
+    cardLinks.forEach((link) => {
+      const href = link.getAttribute("href");
+      const match = href.match(/\/products\/([^/?#]+)/);
+      if (!match) return;
+      const handle = match[1];
+
+      // Find the closest price element near this card
+      const card = link.closest(
+        ".card, .product-card, .grid__item, .collection-list__item, li",
+      );
+      if (!card) return;
+
+      const priceEl = card.querySelector(
+        ".price-item--regular, .price__regular .price-item, .card__price .price-item, .product-card__price",
+      );
+      if (!priceEl || priceEl.dataset.depositAdded) return;
+
+      cardsToUpdate.push({ priceEl, handle });
+    });
+
+    // Group by handle to avoid duplicate fetches
+    const handles = [...new Set(cardsToUpdate.map((c) => c.handle))];
+
+    handles.forEach(async (handle) => {
+      let tags;
+
+      if (tagCache.has(handle)) {
+        tags = tagCache.get(handle);
+      } else {
+        try {
+          const res = await fetch(`/products/${handle}.js`);
+          if (!res.ok) return;
+          const product = await res.json();
+          tags = product.tags || [];
+          tagCache.set(handle, tags);
+        } catch (e) {
+          return;
+        }
+      }
+
+      if (!isEligible(tags)) return;
+
+      // Apply to all cards with this handle
+      cardsToUpdate
+        .filter((c) => c.handle === handle)
+        .forEach((c) => appendDepositText(c.priceEl));
+    });
+  }
+
+  /**
+   * Main update function — runs on all page types.
    */
   function updatePrices() {
-    // Product page price
-    document
-      .querySelectorAll(".price__regular .price-item, .price-item--regular, .product__price .price-item")
-      .forEach(appendDepositText);
+    const pageType = window.Shopify?.Analytics?.meta?.page?.pageType
+      || document.body.dataset.template
+      || "";
 
-    // Product card prices
-    document
-      .querySelectorAll(".card__price .price-item, .price-item--regular")
-      .forEach(appendDepositText);
-
-    // Cart line item prices
-    document
-      .querySelectorAll(".cart-item__price .price-item, .cart__price .price-item")
-      .forEach(appendDepositText);
+    if (pageType === "product" || document.getElementById("deposit-product-tags")) {
+      updateProductPage();
+    } else {
+      updateProductCards();
+    }
   }
 
   // Run on DOM ready
@@ -78,9 +181,8 @@
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.addedNodes.length > 0) {
-        // Debounce
         clearTimeout(window.__depositUpdateTimer);
-        window.__depositUpdateTimer = setTimeout(updatePrices, 100);
+        window.__depositUpdateTimer = setTimeout(updatePrices, 200);
         break;
       }
     }
@@ -91,7 +193,7 @@
   // Re-run on variant change (product page)
   document.addEventListener("change", (e) => {
     if (e.target.matches('input[name="id"], select[name="id"]')) {
-      setTimeout(updatePrices, 200);
+      setTimeout(updatePrices, 300);
     }
   });
 

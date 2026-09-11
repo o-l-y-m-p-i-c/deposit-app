@@ -1,16 +1,37 @@
 {% comment %}
-  Deposit price block — shows "{{ price }} + 0.10Euro per bottle" next to product price.
+  Deposit price block — shows "+ €0.10 per bottle" next to product price.
+  Only renders on eligible products (matching include tags, not matching exclude tags).
   Add this block to the product page section in the theme editor.
 {% endcomment %}
 
-<div class="deposit-price-display" data-deposit-block>
-  {%- assign config = app.metafields["$app:deposit"]["display-config"].value -%}
-  {%- if config.enabled -%}
-    <span class="deposit-price-text" style="font-size: 0.85em; color: #666;">
-      + {{ config.depositText | default: "0.10Euro per bottle" }}
-    </span>
+{%- assign config = app.metafields["$app:deposit"]["display-config"].value -%}
+{%- if config.enabled -%}
+  {%- assign product_tags = product.tags | downcase -%}
+  {%- assign is_included = false -%}
+  {%- assign is_excluded = false -%}
+
+  {%- for tag in config.includeTags -%}
+    {%- assign tag_lower = tag | downcase -%}
+    {%- if product_tags contains tag_lower -%}
+      {%- assign is_included = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- for tag in config.excludeTags -%}
+    {%- assign tag_lower = tag | downcase -%}
+    {%- if product_tags contains tag_lower -%}
+      {%- assign is_excluded = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if is_included and is_excluded == false -%}
+    <div class="deposit-price-display" data-deposit-block data-deposit-eligible="true">
+      <span class="deposit-price-text" style="font-size: 0.85em; color: #666;">
+        + {{ config.depositText | default: "0.10Euro per bottle" }}
+      </span>
+    </div>
   {%- endif -%}
-</div>
+{%- endif -%}
 
 {% schema %}
 {

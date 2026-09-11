@@ -219,12 +219,18 @@ export async function syncStorefrontMetafield(
     amountMinor: number;
     currencyCode: string;
   },
+  rules: {
+    includeTags: { value: string }[];
+    excludeTags: { value: string }[];
+  },
 ) {
   const config = {
     enabled: settings.enabled,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositText: `${(settings.amountMinor / 100).toFixed(2)}${settings.currencyCode === "EUR" ? "Euro" : settings.currencyCode} per bottle`,
+    includeTags: rules.includeTags.map((r) => r.value),
+    excludeTags: rules.excludeTags.map((r) => r.value),
   };
 
   const result = await adminGraphql(SET_METAFIELDS, {
@@ -300,11 +306,12 @@ export async function fullSync(shop: string, appInstallationId: string) {
   }
 
   try {
+    const storefrontRules = await getRulesGrouped(shop);
     await syncStorefrontMetafield(shop, appInstallationId, {
       enabled: settings.enabled,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
-    });
+    }, storefrontRules);
     await log("sync_storefront", "success", "Storefront metafield synced");
   } catch (error) {
     await log("sync_storefront", "error", String(error));
