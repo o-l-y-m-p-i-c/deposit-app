@@ -281,7 +281,7 @@
       depositInfo.style.cssText =
         "font-size: 0.8em; color: #666; margin-top: 0.5rem; text-align: center;";
 
-      depositInfo.textContent = `+ ${depositTotalFormatted} ${shopCurrency} deposit`;
+      depositInfo.textContent = `incl. ${depositTotalFormatted} ${shopCurrency} deposit`;
 
       // Insert after <quantity-popover> inside the quantity cell
       const popover = qtyCell.querySelector("quantity-popover");
