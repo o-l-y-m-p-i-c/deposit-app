@@ -24,7 +24,7 @@ import { useLoaderData, useFetcher } from "@remix-run/react";
 import { authenticate } from "~/shopify.server";
 import { getSettings, updateSettings } from "~/models/settings.server";
 import { getRules, addRule, removeRule } from "~/models/rules.server";
-import { fullSync } from "~/lib/deposit.server";
+import { fullSync, cleanupShop } from "~/lib/deposit.server";
 import {
   adminGraphql,
   GET_COLLECTIONS,
@@ -178,6 +178,15 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   }
 
+  if (intent === "cleanup") {
+    try {
+      await cleanupShop(session.shop);
+      return json({ success: true, message: "Cleanup complete — you can now safely uninstall the app" });
+    } catch (e) {
+      return json({ error: String(e) }, { status: 500 });
+    }
+  }
+
   return json({ error: "Unknown intent" }, { status: 400 });
 }
 
@@ -193,6 +202,8 @@ export default function SettingsPage() {
   const [newRuleTagValue, setNewRuleTagValue] = useState("");
   const [newRuleCollectionId, setNewRuleCollectionId] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [showCleanupModal, setShowCleanupModal] = useState(false);
+  const [cleaningUp, setCleaningUp] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -255,10 +266,17 @@ export default function SettingsPage() {
     fetcher.submit({ intent: "sync" }, { method: "post" });
   }, [fetcher]);
 
+  const handleCleanup = useCallback(() => {
+    setCleaningUp(true);
+    setShowCleanupModal(false);
+    fetcher.submit({ intent: "cleanup" }, { method: "post" });
+  }, [fetcher]);
+
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
       const data = fetcher.data as { success?: boolean; error?: string; message?: string };
       setSyncing(false);
+      setCleaningUp(false);
       if (data.success) {
         setToastMessage(data.message || "Sync complete");
       } else if (data.error) {
@@ -320,6 +338,11 @@ export default function SettingsPage() {
           content: "Sync Now",
           onAction: handleSync,
           loading: syncing,
+        },
+        {
+          content: "Clean up before uninstall",
+          onAction: () => setShowCleanupModal(true),
+          loading: cleaningUp,
         },
       ]}
     >
@@ -514,6 +537,45 @@ export default function SettingsPage() {
                 ? "Exclusion rules always take priority over inclusion rules."
                 : "Products matching this rule will get a deposit (unless excluded by another rule)."}
             </Banner>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      {/* Cleanup Confirmation Modal */}
+      <Modal
+        open={showCleanupModal}
+        onClose={() => setShowCleanupModal(false)}
+        title="Clean up before uninstall"
+        primaryAction={{
+          content: "Yes, clean up everything",
+          onAction: handleCleanup,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setShowCleanupModal(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            <Banner tone="critical">
+              This will permanently remove all deposit data. Only do this if you plan to uninstall the app.
+            </Banner>
+            <Text as="p">The following will be deleted:</Text>
+            <BlockStack gap="200">
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone="critical">1</Badge>
+                <Text as="span">Cart Transform — stops the deposit Function from running</Text>
+              </InlineStack>
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone="critical">2</Badge>
+                <Text as="span">Bottle Deposit product — removed from your catalog</Text>
+              </InlineStack>
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone="critical">3</Badge>
+                <Text as="span">All rules and settings — deleted from the database</Text>
+              </InlineStack>
+            </BlockStack>
+            <Text tone="subdued" as="p">
+              App-owned metafields are automatically removed by Shopify when you uninstall.
+              After cleanup, you can safely uninstall the app from your Shopify admin.
+            </Text>
           </BlockStack>
         </Modal.Section>
       </Modal>

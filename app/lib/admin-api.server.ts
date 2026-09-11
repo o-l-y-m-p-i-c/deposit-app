@@ -306,3 +306,35 @@ export const GET_COLLECTIONS = /* GraphQL */ `#graphql
     }
   }
 `;
+
+/**
+ * Delete a Cart Transform by ID.
+ * Called during cleanup before app uninstall.
+ */
+export const DELETE_CART_TRANSFORM = /* GraphQL */ `#graphql
+  mutation DeleteCartTransform($id: ID!) {
+    cartTransformDelete(id: $id) {
+      deletedId
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
+ * Delete a product by ID.
+ * Called during cleanup to remove the deposit product.
+ */
+export const DELETE_PRODUCT = /* GraphQL */ `#graphql
+  mutation DeleteProduct($id: ID!) {
+    productDelete(input: { id: $id }) {
+      deletedProductId
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;

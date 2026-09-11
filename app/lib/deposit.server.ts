@@ -7,6 +7,8 @@ import {
   adminGraphql,
   CREATE_CART_TRANSFORM,
   CREATE_DEPOSIT_PRODUCT,
+  DELETE_CART_TRANSFORM,
+  DELETE_PRODUCT,
   GET_CART_TRANSFORMS,
   GET_DEPOSIT_PRODUCT,
   SET_METAFIELDS,
@@ -314,4 +316,69 @@ export async function fullSync(shop: string, appInstallationId: string) {
     data: { lastSyncedAt: new Date() },
   });
   return settings;
+}
+
+/**
+ * Remove all deposit artifacts from Shopify and the database.
+ *
+ * This should be called BEFORE the merchant uninstalls the app, while
+ * the OAuth token is still valid. After uninstall, Shopify revokes the
+ * token and Admin API calls are no longer possible.
+ *
+ * Steps:
+ * 1. Delete the Cart Transform (stops the Function from running)
+ * 2. Delete the deposit product (removes the €0.10 variant from the catalog)
+ * 3. Delete all rules and settings from the database
+ *
+ * Metafields in the $app:deposit namespace are auto-deleted by Shopify
+ * on uninstall, so we don't need to remove them manually.
+ */
+export async function cleanupShop(shop: string) {
+  const settings = await prisma.depositSettings.findUnique({
+    where: { shopId: shop },
+  });
+  const log = (operation: string, status: string, message: string) =>
+    prisma.syncLog.create({ data: { shopId: shop, operation, status, message } });
+
+  // 1. Delete the Cart Transform
+  if (settings?.cartTransformId) {
+    try {
+      const result = await adminGraphql(DELETE_CART_TRANSFORM, {
+        id: settings.cartTransformId,
+      }, shop);
+      const errors = result?.data?.cartTransformDelete?.userErrors;
+      if (errors?.length > 0) {
+        // Cart Transform may have already been deleted — log but don't throw
+        await log("delete_cart_transform", "warning", `Errors: ${JSON.stringify(errors)}`);
+      } else {
+        await log("delete_cart_transform", "success", `Deleted ${settings.cartTransformId}`);
+      }
+    } catch (error) {
+      // Non-fatal: Cart Transform may already be gone
+      await log("delete_cart_transform", "warning", String(error));
+    }
+  }
+
+  // 2. Delete the deposit product
+  if (settings?.depositProductId) {
+    try {
+      const result = await adminGraphql(DELETE_PRODUCT, {
+        id: settings.depositProductId,
+      }, shop);
+      const errors = result?.data?.productDelete?.userErrors;
+      if (errors?.length > 0) {
+        await log("delete_deposit_product", "warning", `Errors: ${JSON.stringify(errors)}`);
+      } else {
+        await log("delete_deposit_product", "success", `Deleted ${settings.depositProductId}`);
+      }
+    } catch (error) {
+      // Non-fatal: product may already be deleted
+      await log("delete_deposit_product", "warning", String(error));
+    }
+  }
+
+  // 3. Delete all rules and settings from the database
+  await prisma.depositRule.deleteMany({ where: { shopId: shop } });
+  await prisma.depositSettings.deleteMany({ where: { shopId: shop } });
+  await log("cleanup_db", "success", "Deleted all rules and settings");
 }
