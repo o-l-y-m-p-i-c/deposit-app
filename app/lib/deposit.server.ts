@@ -121,11 +121,25 @@ export async function updateDepositPrice(
   return result?.data?.productVariantsBulkUpdate?.productVariants?.[0];
 }
 
-export async function createCartTransform(shop: string) {
+/**
+ * Get or create a Cart Transform for the shop.
+ * If `existingId` is provided, verifies it still exists in Shopify;
+ * if it was deleted (e.g. app reinstalled), a new one is created.
+ */
+export async function getOrCreateCartTransform(shop: string, existingId?: string | null) {
   const existingResult = await adminGraphql(GET_CART_TRANSFORMS, {}, shop);
-  const existing = existingResult?.data?.cartTransforms?.nodes?.[0];
-  if (existing) return existing;
+  const nodes = existingResult?.data?.cartTransforms?.nodes ?? [];
 
+  // Reuse the stored ID if it still exists
+  if (existingId) {
+    const match = nodes.find((n: { id: string }) => n.id === existingId);
+    if (match) return match;
+  }
+
+  // Reuse any other existing Cart Transform for this app
+  if (nodes.length > 0) return nodes[0];
+
+  // Otherwise create a new one
   const result = await adminGraphql(CREATE_CART_TRANSFORM, {
     functionHandle: CART_TRANSFORM_HANDLE,
   }, shop);
@@ -259,17 +273,17 @@ export async function fullSync(shop: string, appInstallationId: string) {
   }
 
   try {
-    let cartTransformId = settings.cartTransformId;
-    if (!cartTransformId) {
-      const cartTransform = await createCartTransform(shop);
-      cartTransformId = cartTransform.id;
+    // Always verify the Cart Transform still exists in Shopify.
+    // It can be deleted when the app is reinstalled, leaving a stale ID.
+    const cartTransform = await getOrCreateCartTransform(shop, settings.cartTransformId);
+    let cartTransformId = cartTransform.id;
+    if (cartTransformId !== settings.cartTransformId) {
       settings = await prisma.depositSettings.update({
         where: { shopId: shop },
         data: { cartTransformId },
       });
       await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
     }
-    if (!cartTransformId) throw new Error("Cart Transform ID is unavailable");
     const rules = await getRulesGrouped(shop);
     await syncCartTransformMetafield(shop, cartTransformId, {
       enabled: settings.enabled,
