@@ -11,8 +11,8 @@
  * - Product pages: reads product tags from #deposit-product-tags
  * - Product cards (collection/search pages): fetches product tags via
  *   /products/{handle}.js and caches results
- * - Cart page & cart drawer: injects a separate "Bottle Deposit" <tr>
- *   row after each eligible product line (Dawn theme compatible)
+ * - Cart page & cart drawer: injects deposit info inside the quantity
+ *   cell, under <quantity-popover>
  */
 
 (function () {
@@ -52,9 +52,11 @@
   // Cache of product handle -> tags
   const tagCache = new Map();
 
+  // Guard flag to prevent infinite MutationObserver loop
+  let isUpdating = false;
+
   /**
    * Format a number in European style (e.g., 0.10 -> "0,10")
-   * to match Dawn's price formatting.
    */
   function formatPrice(amount) {
     return amount.replace(".", ",");
@@ -165,13 +167,10 @@
    * Dawn theme uses:
    *   Cart page:  <tr class="cart-item" id="CartItem-{index}">
    *   Cart drawer: <tr class="cart-item" id="CartDrawer-Item-{index}">
-   *
-   * We match via the quantity input's data-quantity-line-key (cart line key)
-   * or data-index, then walk up to the <tr>.
    */
   function findCartRow(item) {
     const key = item.key;
-    const index = item.line; // 1-based line number from /cart.js
+    const index = item.line;
 
     // Strategy 1: Find by quantity input with data-quantity-line-key
     if (key) {
@@ -186,9 +185,7 @@
 
     // Strategy 2: Find by data-index on the input
     if (index) {
-      const input = document.querySelector(
-        `input[data-index="${index}"]`,
-      );
+      const input = document.querySelector(`input[data-index="${index}"]`);
       if (input) {
         const row = input.closest("tr.cart-item");
         if (row) return row;
@@ -208,10 +205,17 @@
   }
 
   /**
-   * Inject a separate "Bottle Deposit" <tr> row after each eligible
-   * product line in the cart. Dawn theme compatible.
+   * Inject deposit info inside the quantity cell, under <quantity-popover>.
    *
-   * Works on both cart page (5 columns) and cart drawer (4 columns).
+   * Dawn theme structure:
+   * <td class="cart-item__quantity">
+   *   <quantity-popover>...</quantity-popover>
+   * </td>
+   *
+   * We add after <quantity-popover>:
+   * <div data-deposit-line="true" class="deposit-cart-info">
+   *   + 0,40 EUR deposit
+   * </div>
    */
   async function updateCart() {
     let cart;
@@ -225,8 +229,8 @@
 
     if (!cart.items || cart.items.length === 0) return;
 
-    // Remove previously injected deposit rows (clean slate for re-render)
-    document.querySelectorAll('tr[data-deposit-line="true"]').forEach((el) => {
+    // Remove previously injected deposit info (clean slate for re-render)
+    document.querySelectorAll('[data-deposit-line="true"]').forEach((el) => {
       el.remove();
     });
 
@@ -260,93 +264,62 @@
       const lineEl = findCartRow(item);
       if (!lineEl) continue;
 
-      // Detect cart type: drawer (4 cols) vs page (5 cols)
-      const isDrawer = lineEl.id.startsWith("CartDrawer-");
-      const cols = lineEl.querySelectorAll("td");
-      const colCount = cols.length;
+      // Find the quantity <td> cell
+      const qtyCell = lineEl.querySelector("td.cart-item__quantity");
+      if (!qtyCell) continue;
 
       // Deposit amount for this line
       const depositPerUnit = parseFloat(config.depositAmount) || 0;
       const depositTotal = (depositPerUnit * item.quantity).toFixed(2);
       const depositTotalFormatted = formatPrice(depositTotal);
-      const depositUnitFormatted = formatPrice(config.depositAmount);
-      const productTitle = item.product_title || item.title;
 
-      // Build the deposit <tr> with matching column structure
-      const depositRow = document.createElement("tr");
-      depositRow.className = "cart-item";
-      depositRow.dataset.depositLine = "true";
-      depositRow.dataset.depositFor = handle;
-      depositRow.style.opacity = "0.85";
+      // Create deposit info element
+      const depositInfo = document.createElement("div");
+      depositInfo.dataset.depositLine = "true";
+      depositInfo.dataset.depositFor = handle;
+      depositInfo.className = "deposit-cart-info";
+      depositInfo.style.cssText =
+        "font-size: 0.8em; color: #666; margin-top: 0.5rem; text-align: center;";
 
-      if (isDrawer) {
-        // Cart drawer: 4 columns (media, details, totals, quantity)
-        depositRow.innerHTML = `
-          <td class="cart-item__media" role="cell" headers="CartDrawer-ColumnProductImage"></td>
-          <td class="cart-item__details" role="cell" headers="CartDrawer-ColumnProduct">
-            <div class="cart-item__title">
-              <span class="cart-item__name h4 break">Bottle Deposit</span>
-            </div>
-            <div class="product-option">Included with ${productTitle}</div>
-          </td>
-          <td class="cart-item__totals right" role="cell" headers="CartDrawer-ColumnTotal">
-            <div class="cart-item__price-wrapper">
-              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-            </div>
-          </td>
-          <td class="cart-item__quantity" role="cell" headers="CartDrawer-ColumnQuantity">
-            <span class="visually-hidden">${item.quantity}</span>
-          </td>
-        `;
+      depositInfo.textContent = `+ ${depositTotalFormatted} ${shopCurrency} deposit`;
+
+      // Insert after <quantity-popover> inside the quantity cell
+      const popover = qtyCell.querySelector("quantity-popover");
+      if (popover) {
+        popover.insertAdjacentElement("afterend", depositInfo);
       } else {
-        // Cart page: 5 columns (media, details, mobile-totals, quantity, desktop-totals)
-        depositRow.innerHTML = `
-          <td class="cart-item__media"></td>
-          <td class="cart-item__details">
-            <div class="cart-item__title">
-              <span class="cart-item__name h4 break">Bottle Deposit</span>
-            </div>
-            <div class="product-option">Included with ${productTitle}</div>
-          </td>
-          <td class="cart-item__totals right medium-hide large-up-hide">
-            <div class="cart-item__price-wrapper">
-              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-            </div>
-          </td>
-          <td class="cart-item__quantity">
-            <span>${item.quantity}</span>
-          </td>
-          <td class="cart-item__totals right small-hide">
-            <div class="cart-item__price-wrapper">
-              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-            </div>
-          </td>
-        `;
+        qtyEl.appendChild(depositInfo);
       }
-
-      // Insert after the product row
-      lineEl.parentNode.insertBefore(depositRow, lineEl.nextSibling);
     }
   }
 
   /**
    * Main update function — runs on all page types.
+   * Guarded against infinite loops from MutationObserver.
    */
   function updatePrices() {
-    const pageType = window.Shopify?.Analytics?.meta?.page?.pageType
-      || document.body.dataset.template
-      || "";
+    if (isUpdating) return;
+    isUpdating = true;
 
-    if (pageType === "product" || document.getElementById("deposit-product-tags")) {
-      updateProductPage();
-    }
+    try {
+      const pageType = window.Shopify?.Analytics?.meta?.page?.pageType
+        || document.body.dataset.template
+        || "";
 
-    // Cart page and cart drawer — always check
-    updateCart();
+      if (pageType === "product" || document.getElementById("deposit-product-tags")) {
+        updateProductPage();
+      }
 
-    // Product cards on collection/search pages
-    if (pageType !== "product") {
-      updateProductCards();
+      // Cart page and cart drawer — always check
+      updateCart();
+
+      // Product cards on collection/search pages
+      if (pageType !== "product") {
+        updateProductCards();
+      }
+    } finally {
+      // Release the guard after a short delay so async operations complete
+      setTimeout(() => { isUpdating = false; }, 500);
     }
   }
 
@@ -358,11 +331,21 @@
   }
 
   // Re-run on cart section re-render (AJAX cart updates)
+  // Filter out mutations from our own injected elements to prevent loops
   const observer = new MutationObserver((mutations) => {
+    // Skip if already updating
+    if (isUpdating) return;
+
     for (const mutation of mutations) {
+      // Skip mutations that only involve our own elements
+      const addedByUs = Array.from(mutation.addedNodes).every(
+        (n) => n.nodeType === 1 && n.dataset && n.dataset.depositLine === "true",
+      );
+      if (addedByUs && mutation.addedNodes.length > 0) continue;
+
       if (mutation.addedNodes.length > 0) {
         clearTimeout(window.__depositUpdateTimer);
-        window.__depositUpdateTimer = setTimeout(updatePrices, 200);
+        window.__depositUpdateTimer = setTimeout(updatePrices, 300);
         break;
       }
     }
