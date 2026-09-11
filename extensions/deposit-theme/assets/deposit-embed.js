@@ -163,45 +163,50 @@
   }
 
   /**
-   * Find the <tr> cart row for a given cart line item.
+   * Find ALL <tr> cart rows for a given cart line item.
+   * On the cart page, both the cart table AND the cart drawer are in the DOM,
+   * so we need to find and inject into both.
+   *
    * Dawn theme uses:
    *   Cart page:  <tr class="cart-item" id="CartItem-{index}">
    *   Cart drawer: <tr class="cart-item" id="CartDrawer-Item-{index}">
    */
-  function findCartRow(item) {
+  function findCartRows(item) {
     const key = item.key;
     const index = item.line;
+    const rows = [];
 
     // Strategy 1: Find by quantity input with data-quantity-line-key
     if (key) {
-      const input = document.querySelector(
-        `input[data-quantity-line-key="${key}"]`,
-      );
-      if (input) {
-        const row = input.closest("tr.cart-item");
-        if (row) return row;
-      }
+      document
+        .querySelectorAll(`input[data-quantity-line-key="${key}"]`)
+        .forEach((input) => {
+          const row = input.closest("tr.cart-item");
+          if (row && !rows.includes(row)) rows.push(row);
+        });
     }
 
     // Strategy 2: Find by data-index on the input
-    if (index) {
-      const input = document.querySelector(`input[data-index="${index}"]`);
-      if (input) {
-        const row = input.closest("tr.cart-item");
-        if (row) return row;
-      }
+    if (rows.length === 0 && index) {
+      document
+        .querySelectorAll(`input[data-index="${index}"]`)
+        .forEach((input) => {
+          const row = input.closest("tr.cart-item");
+          if (row && !rows.includes(row)) rows.push(row);
+        });
     }
 
-    // Strategy 3: Find by product link inside a tr.cart-item
-    const link = document.querySelector(
-      `tr.cart-item a[href*="/products/${item.handle}"]`,
-    );
-    if (link) {
-      const row = link.closest("tr.cart-item");
-      if (row) return row;
+    // Strategy 3: Find by product link inside tr.cart-item
+    if (rows.length === 0) {
+      document
+        .querySelectorAll(`tr.cart-item a[href*="/products/${item.handle}"]`)
+        .forEach((link) => {
+          const row = link.closest("tr.cart-item");
+          if (row && !rows.includes(row)) rows.push(row);
+        });
     }
 
-    return null;
+    return rows;
   }
 
   /**
@@ -255,12 +260,9 @@
 
       if (!isEligible(tags)) continue;
 
-      // Find the <tr> cart row
-      const lineEl = findCartRow(item);
-      if (!lineEl) continue;
-
-      // Detect cart type: drawer vs page
-      const isDrawer = lineEl.id.startsWith("CartDrawer-");
+      // Find ALL <tr> cart rows (cart page + cart drawer may both be in DOM)
+      const lineEls = findCartRows(item);
+      if (lineEls.length === 0) continue;
 
       // Deposit amount for this line
       const depositPerUnit = parseFloat(config.depositAmount) || 0;
@@ -268,60 +270,72 @@
       const depositTotalFormatted = formatPrice(depositTotal);
       const productTitle = item.product_title || item.title;
 
-      // Build the deposit <tr> with matching column structure
-      const depositRow = document.createElement("tr");
-      depositRow.className = "cart-item";
-      depositRow.dataset.depositLine = "true";
-      depositRow.dataset.depositFor = handle;
-      depositRow.style.cssText = "opacity: 0.7; border-top: 1px dashed rgba(0,0,0,0.08);";
+      // Inject a deposit row after each matching product row
+      for (const lineEl of lineEls) {
+        // Skip if this row already has a deposit row after it
+        const next = lineEl.nextElementSibling;
+        if (next && next.dataset.depositLine === "true" && next.dataset.depositFor === handle) {
+          continue;
+        }
 
-      if (isDrawer) {
-        // Cart drawer: 4 columns (media, details, totals, quantity)
-        depositRow.innerHTML = `
-          <td class="cart-item__media" role="cell" headers="CartDrawer-ColumnProductImage"></td>
-          <td class="cart-item__details" role="cell" headers="CartDrawer-ColumnProduct">
-            <div class="cart-item__title">
-              <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
-            </div>
-            <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
-          </td>
-          <td class="cart-item__totals right" role="cell" headers="CartDrawer-ColumnTotal">
-            <div class="cart-item__price-wrapper">
-              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-            </div>
-          </td>
-          <td class="cart-item__quantity" role="cell" headers="CartDrawer-ColumnQuantity">
-            <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
-          </td>
-        `;
-      } else {
-        // Cart page: 5 columns (media, details, mobile-totals, quantity, desktop-totals)
-        depositRow.innerHTML = `
-          <td class="cart-item__media"></td>
-          <td class="cart-item__details">
-            <div class="cart-item__title">
-              <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
-            </div>
-            <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
-          </td>
-          <td class="cart-item__totals right medium-hide large-up-hide">
-            <div class="cart-item__price-wrapper">
-              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-            </div>
-          </td>
-          <td class="cart-item__quantity">
-            <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
-          </td>
-          <td class="cart-item__totals right small-hide">
-            <div class="cart-item__price-wrapper">
-              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-            </div>
-          </td>
-        `;
+        // Detect cart type: drawer vs page
+        const isDrawer = lineEl.id.startsWith("CartDrawer-");
+
+        // Build the deposit <tr> with matching column structure
+        const depositRow = document.createElement("tr");
+        depositRow.className = "cart-item";
+        depositRow.dataset.depositLine = "true";
+        depositRow.dataset.depositFor = handle;
+        depositRow.style.cssText = "opacity: 0.7; border-top: 1px dashed rgba(0,0,0,0.08);";
+
+        if (isDrawer) {
+          // Cart drawer: 4 columns (media, details, totals, quantity)
+          depositRow.innerHTML = `
+            <td class="cart-item__media" role="cell" headers="CartDrawer-ColumnProductImage"></td>
+            <td class="cart-item__details" role="cell" headers="CartDrawer-ColumnProduct">
+              <div class="cart-item__title">
+                <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
+              </div>
+              <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
+            </td>
+            <td class="cart-item__totals right" role="cell" headers="CartDrawer-ColumnTotal">
+              <div class="cart-item__price-wrapper">
+                <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
+              </div>
+            </td>
+            <td class="cart-item__quantity" role="cell" headers="CartDrawer-ColumnQuantity">
+              <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
+            </td>
+          `;
+        } else {
+          // Cart page: 5 columns (media, details, mobile-totals, quantity, desktop-totals)
+          depositRow.innerHTML = `
+            <td class="cart-item__media"></td>
+            <td class="cart-item__details">
+              <div class="cart-item__title">
+                <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
+              </div>
+              <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
+            </td>
+            <td class="cart-item__totals right medium-hide large-up-hide">
+              <div class="cart-item__price-wrapper">
+                <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
+              </div>
+            </td>
+            <td class="cart-item__quantity">
+              <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
+            </td>
+            <td class="cart-item__totals right small-hide">
+              <div class="cart-item__price-wrapper">
+                <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
+              </div>
+            </td>
+          `;
+        }
+
+        // Insert after the product row
+        lineEl.parentNode.insertBefore(depositRow, lineEl.nextSibling);
       }
-
-      // Insert after the product row
-      lineEl.parentNode.insertBefore(depositRow, lineEl.nextSibling);
     }
   }
 
