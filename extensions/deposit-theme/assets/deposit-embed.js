@@ -205,17 +205,12 @@
   }
 
   /**
-   * Inject deposit info inside the quantity cell, under <quantity-popover>.
+   * Inject a separate "Bottle Deposit" <tr> row after each eligible
+   * product line in the cart — same style as checkout.
    *
-   * Dawn theme structure:
-   * <td class="cart-item__quantity">
-   *   <quantity-popover>...</quantity-popover>
-   * </td>
-   *
-   * We add after <quantity-popover>:
-   * <div data-deposit-line="true" class="deposit-cart-info">
-   *   + 0,40 EUR deposit
-   * </div>
+   * Dawn theme compatible:
+   *   Cart page:  5 columns (media, details, mobile-totals, qty, desktop-totals)
+   *   Cart drawer: 4 columns (media, details, totals, qty)
    */
   async function updateCart() {
     let cart;
@@ -229,8 +224,8 @@
 
     if (!cart.items || cart.items.length === 0) return;
 
-    // Remove previously injected deposit info (clean slate for re-render)
-    document.querySelectorAll('[data-deposit-line="true"]').forEach((el) => {
+    // Remove previously injected deposit rows (clean slate for re-render)
+    document.querySelectorAll('tr[data-deposit-line="true"]').forEach((el) => {
       el.remove();
     });
 
@@ -264,32 +259,69 @@
       const lineEl = findCartRow(item);
       if (!lineEl) continue;
 
-      // Find the quantity <td> cell
-      const qtyCell = lineEl.querySelector("td.cart-item__quantity");
-      if (!qtyCell) continue;
+      // Detect cart type: drawer vs page
+      const isDrawer = lineEl.id.startsWith("CartDrawer-");
 
       // Deposit amount for this line
       const depositPerUnit = parseFloat(config.depositAmount) || 0;
       const depositTotal = (depositPerUnit * item.quantity).toFixed(2);
       const depositTotalFormatted = formatPrice(depositTotal);
+      const productTitle = item.product_title || item.title;
 
-      // Create deposit info element
-      const depositInfo = document.createElement("div");
-      depositInfo.dataset.depositLine = "true";
-      depositInfo.dataset.depositFor = handle;
-      depositInfo.className = "deposit-cart-info";
-      depositInfo.style.cssText =
-        "font-size: 0.8em; color: #666; margin-top: 0.5rem; text-align: center;";
+      // Build the deposit <tr> with matching column structure
+      const depositRow = document.createElement("tr");
+      depositRow.className = "cart-item";
+      depositRow.dataset.depositLine = "true";
+      depositRow.dataset.depositFor = handle;
+      depositRow.style.cssText = "opacity: 0.7; border-top: 1px dashed rgba(0,0,0,0.08);";
 
-      depositInfo.textContent = `incl. ${depositTotalFormatted} ${shopCurrency} deposit`;
-
-      // Insert after <quantity-popover> inside the quantity cell
-      const popover = qtyCell.querySelector("quantity-popover");
-      if (popover) {
-        popover.insertAdjacentElement("afterend", depositInfo);
+      if (isDrawer) {
+        // Cart drawer: 4 columns (media, details, totals, quantity)
+        depositRow.innerHTML = `
+          <td class="cart-item__media" role="cell" headers="CartDrawer-ColumnProductImage"></td>
+          <td class="cart-item__details" role="cell" headers="CartDrawer-ColumnProduct">
+            <div class="cart-item__title">
+              <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
+            </div>
+            <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
+          </td>
+          <td class="cart-item__totals right" role="cell" headers="CartDrawer-ColumnTotal">
+            <div class="cart-item__price-wrapper">
+              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
+            </div>
+          </td>
+          <td class="cart-item__quantity" role="cell" headers="CartDrawer-ColumnQuantity">
+            <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
+          </td>
+        `;
       } else {
-        qtyCell.appendChild(depositInfo);
+        // Cart page: 5 columns (media, details, mobile-totals, quantity, desktop-totals)
+        depositRow.innerHTML = `
+          <td class="cart-item__media"></td>
+          <td class="cart-item__details">
+            <div class="cart-item__title">
+              <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
+            </div>
+            <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
+          </td>
+          <td class="cart-item__totals right medium-hide large-up-hide">
+            <div class="cart-item__price-wrapper">
+              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
+            </div>
+          </td>
+          <td class="cart-item__quantity">
+            <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
+          </td>
+          <td class="cart-item__totals right small-hide">
+            <div class="cart-item__price-wrapper">
+              <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
+            </div>
+          </td>
+        `;
       }
+
+      // Insert after the product row
+      lineEl.parentNode.insertBefore(depositRow, lineEl.nextSibling);
     }
   }
 

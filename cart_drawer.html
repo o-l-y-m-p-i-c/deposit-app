@@ -1,0 +1,136 @@
+<cart-drawer class="drawer animate active">
+  <div id="CartDrawer" class="cart-drawer">
+    <div id="CartDrawer-Overlay" class="cart-drawer__overlay"></div>
+    <div class="drawer__inner gradient color-scheme-1" role="dialog" aria-modal="true" aria-label="Your cart" tabindex="-1"><div class="drawer__header">
+        <h2 class="drawer__heading">Your cart</h2>
+        <button class="drawer__close" type="button" onclick="this.closest('cart-drawer').close()" aria-label="Close">
+          <span class="svg-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" class="icon icon-close" viewBox="0 0 18 17"><path fill="currentColor" d="M.865 15.978a.5.5 0 0 0 .707.707l7.433-7.431 7.579 7.282a.501.501 0 0 0 .846-.37.5.5 0 0 0-.153-.351L9.712 8.546l7.417-7.416a.5.5 0 1 0-.707-.708L8.991 7.853 1.413.573a.5.5 0 1 0-.693.72l7.563 7.268z"></path></svg>
+</span>
+        </button>
+      </div>
+      <cart-drawer-items view-event-payload="{&quot;context&quot;:&quot;dialog&quot;,&quot;cart&quot;:{&quot;totalQuantity&quot;:5,&quot;cost&quot;:{&quot;totalAmount&quot;:{&quot;amount&quot;:&quot;10.5&quot;,&quot;currencyCode&quot;:&quot;EUR&quot;}},&quot;lines&quot;:[{&quot;id&quot;:&quot;58685088727304:33b62267f5841206cd0091434892252f&quot;,&quot;quantity&quot;:5,&quot;cost&quot;:{&quot;totalAmount&quot;:{&quot;amount&quot;:&quot;10.5&quot;,&quot;currencyCode&quot;:&quot;EUR&quot;}}}],&quot;discountCodes&quot;:[]}}" view-event-trigger="manual">
+        <form action="/cart" id="CartDrawer-Form" class="cart__contents cart-drawer__form" method="post">
+          <div id="CartDrawer-CartItems" class="drawer__contents js-contents"><div class="drawer__cart-items-wrapper">
+                <table class="cart-items" role="table">
+                  <thead role="rowgroup">
+                    <tr role="row">
+                      <th id="CartDrawer-ColumnProductImage" role="columnheader">
+                        <span class="visually-hidden">Product image</span>
+                      </th>
+                      <th id="CartDrawer-ColumnProduct" class="caption-with-letter-spacing" scope="col" role="columnheader">
+                        Product
+                      </th>
+                      <th id="CartDrawer-ColumnTotal" class="right caption-with-letter-spacing" scope="col" role="columnheader">
+                        Total
+                      </th>
+                      <th id="CartDrawer-ColumnQuantity" role="columnheader">
+                        <span class="visually-hidden">Quantity</span>
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody role="rowgroup"><tr id="CartDrawer-Item-1" class="cart-item" role="row">
+                        <td class="cart-item__media" role="cell" headers="CartDrawer-ColumnProductImage">
+                          
+                            
+                            <a href="/products/t-short?variant=58685088727304" class="cart-item__link" tabindex="-1" aria-hidden="true"> </a>
+                            <img class="cart-item__image" src="//shop-pickaqua.myshopify.com/cdn/shop/files/Core_Range_-_EVIAN-500ML-BOTTLE.png?v=1789125469&amp;width=300" alt="" loading="lazy" width="150" height="314">
+                          
+                        </td>
+
+                        <td class="cart-item__details" role="cell" headers="CartDrawer-ColumnProduct"><div class="cart-item__title">
+                            <a href="/products/t-short?variant=58685088727304" class="cart-item__name h4 break">Evian water</a>
+</div><div class="product-option">
+                              €2,10
+                            </div><dl></dl>
+
+                            <p class="product-option"></p><ul class="discounts list-unstyled" role="list" aria-label="Discount"></ul>
+                        </td>
+
+                        <td class="cart-item__totals right" role="cell" headers="CartDrawer-ColumnTotal">
+
+<div class="loading__spinner hidden">
+  <svg xmlns="http://www.w3.org/2000/svg" class="spinner" viewBox="0 0 66 66"><circle stroke-width="6" cx="33" cy="33" r="30" fill="none" class="path"></circle></svg>
+
+</div>
+<div class="cart-item__price-wrapper"><span class="price price--end">
+                                €10,50
+                              </span></div>
+                        </td><td class="cart-item__quantity " role="cell" headers="CartDrawer-ColumnQuantity">
+                          <quantity-popover>
+                            <div class="cart-item__quantity-wrapper quantity-popover-wrapper">
+                              <div class="quantity-popover-container">
+                                <quantity-input class="quantity cart-quantity">
+                                  <button class="quantity__button" name="minus" type="button">
+                                    <span class="visually-hidden">Decrease quantity for Evian water</span>
+                                    <span class="svg-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" class="icon icon-minus" viewBox="0 0 10 2"><path fill="currentColor" fill-rule="evenodd" d="M.5 1C.5.7.7.5 1 .5h8a.5.5 0 1 1 0 1H1A.5.5 0 0 1 .5 1" clip-rule="evenodd"></path></svg>
+</span>
+                                  </button>
+                                  <input class="quantity__input" type="number" data-quantity-variant-id="58685088727304" data-quantity-line-key="58685088727304:33b62267f5841206cd0091434892252f" name="updates[]" value="5" data-cart-quantity="5" min="0" data-min="1" step="1" aria-label="Quantity for Evian water" id="Drawer-quantity-1" data-index="1">
+                                  <button class="quantity__button" name="plus" type="button">
+                                    <span class="visually-hidden">Increase quantity for Evian water</span>
+                                    <span class="svg-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" class="icon icon-plus" viewBox="0 0 10 10"><path fill="currentColor" fill-rule="evenodd" d="M1 4.51a.5.5 0 0 0 0 1h3.5l.01 3.5a.5.5 0 0 0 1-.01V5.5l3.5-.01a.5.5 0 0 0-.01-1H5.5L5.49.99a.5.5 0 0 0-1 .01v3.5l-3.5.01z" clip-rule="evenodd"></path></svg>
+</span>
+                                  </button>
+                                </quantity-input>
+                              </div>
+                              <cart-remove-button id="CartDrawer-Remove-1" data-index="1">
+                                <button type="button" class="button button--tertiary cart-remove-button" aria-label="Remove Evian water" data-variant-id="58685088727304">
+                                  <span class="svg-wrapper"><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-remove" viewBox="0 0 16 16"><path fill="currentColor" d="M14 3h-3.53a3.07 3.07 0 0 0-.6-1.65C9.44.82 8.8.5 8 .5s-1.44.32-1.87.85A3.06 3.06 0 0 0 5.53 3H2a.5.5 0 0 0 0 1h1.25v10c0 .28.22.5.5.5h8.5a.5.5 0 0 0 .5-.5V4H14a.5.5 0 0 0 0-1M6.91 1.98c.23-.29.58-.48 1.09-.48s.85.19 1.09.48c.2.24.3.6.36 1.02h-2.9c.05-.42.17-.78.36-1.02m4.84 11.52h-7.5V4h7.5z"></path><path fill="currentColor" d="M6.55 5.25a.5.5 0 0 0-.5.5v6a.5.5 0 0 0 1 0v-6a.5.5 0 0 0-.5-.5m2.9 0a.5.5 0 0 0-.5.5v6a.5.5 0 0 0 1 0v-6a.5.5 0 0 0-.5-.5"></path></svg>
+</span>
+                                </button>
+                              </cart-remove-button>
+                            </div><div id="CartDrawer-LineItemError-1" class="cart-item__error" role="alert">
+                              <small class="cart-item__error-text"></small>
+                              <span class="svg-wrapper"><svg class="icon icon-error" viewBox="0 0 13 13"><circle cx="6.5" cy="6.5" r="5.5" stroke="#fff" stroke-width="2"></circle><circle cx="6.5" cy="6.5" r="5.5" fill="#EB001B" stroke="#EB001B" stroke-width=".7"></circle><path fill="#fff" d="m5.874 3.528.1 4.044h1.053l.1-4.044zm.627 6.133c.38 0 .68-.288.68-.656s-.3-.656-.68-.656-.681.288-.681.656.3.656.68.656"></path><path fill="#fff" stroke="#EB001B" stroke-width=".7" d="M5.874 3.178h-.359l.01.359.1 4.044.008.341h1.736l.008-.341.1-4.044.01-.359H5.873Zm.627 6.833c.56 0 1.03-.432 1.03-1.006s-.47-1.006-1.03-1.006-1.031.432-1.031 1.006.47 1.006 1.03 1.006Z"></path></svg>
+</span>
+                            </div>
+                          </quantity-popover><div data-deposit-line="true" data-deposit-for="t-short" class="deposit-cart-info" style="font-size: 0.8em; color: rgb(102, 102, 102); margin-top: 0.5rem; text-align: center;">incl. 0,50 EUR deposit</div>
+                        </td>
+                      </tr></tbody>
+                </table>
+              </div><p id="CartDrawer-LiveRegionText" class="visually-hidden" role="status"></p>
+            <p id="CartDrawer-LineItemStatus" class="visually-hidden" aria-hidden="true" role="status">
+              Loading...
+            </p>
+          </div>
+          <div id="CartDrawer-CartErrors" role="alert"></div>
+        </form>
+      </cart-drawer-items>
+      <div class="drawer__footer"><details id="Details-CartDrawer">
+            <summary role="button" aria-expanded="false">
+              <span class="summary__title">
+                Order special instructions
+<svg class="icon icon-caret" viewBox="0 0 10 6"><path fill="currentColor" fill-rule="evenodd" d="M9.354.646a.5.5 0 0 0-.708 0L5 4.293 1.354.646a.5.5 0 0 0-.708.708l4 4a.5.5 0 0 0 .708 0l4-4a.5.5 0 0 0 0-.708" clip-rule="evenodd"></path></svg>
+</span>
+            </summary>
+            <cart-note class="cart__note field">
+              <label class="visually-hidden" for="CartDrawer-Note">Order special instructions</label>
+              <textarea id="CartDrawer-Note" class="text-area text-area--resize-vertical field__input" name="note" placeholder="Order special instructions"></textarea>
+            </cart-note>
+          </details><!-- Start blocks -->
+        <!-- Subtotals -->
+
+        <div class="cart-drawer__footer">
+          <div></div>
+
+          <div class="totals" role="status">
+            <h2 class="totals__total">Estimated total</h2>
+            <p class="totals__total-value">€10,50 EUR</p>
+          </div>
+
+          <small class="tax-note caption-large rte">Taxes included. Discounts and shipping calculated at checkout.
+</small>
+        </div>
+
+        <!-- CTAs -->
+
+        <div class="cart__ctas">
+          <button type="submit" id="CartDrawer-Checkout" class="cart__checkout-button button" name="checkout" form="CartDrawer-Form">
+            Check out
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</cart-drawer>
