@@ -19,7 +19,8 @@
   const configScript = document.getElementById("deposit-config");
   let config = {
     enabled: false,
-    depositText: "0.10Euro per bottle",
+    depositAmount: "0.10",
+    currencyCode: "EUR",
     includeTags: [],
     excludeTags: [],
   };
@@ -33,6 +34,15 @@
   }
 
   if (!config.enabled) return;
+
+  // Use the shop's active currency (available on storefront via Shopify.global)
+  const shopCurrency =
+    window.Shopify?.currency?.active ||
+    window.Shopify?.currency ||
+    config.currencyCode ||
+    "EUR";
+
+  const depositText = `${config.depositAmount} ${shopCurrency} per bottle`;
 
   const includeTags = (config.includeTags || []).map((t) => t.toLowerCase());
   const excludeTags = (config.excludeTags || []).map((t) => t.toLowerCase());
@@ -63,7 +73,7 @@
     depositSpan.className = "deposit-price-text";
     depositSpan.style.cssText =
       "font-size: 0.85em; color: #666; margin-left: 4px; display: inline;";
-    depositSpan.textContent = " + " + config.depositText;
+    depositSpan.textContent = " + " + depositText;
 
     priceElement.appendChild(depositSpan);
     priceElement.dataset.depositAdded = "true";

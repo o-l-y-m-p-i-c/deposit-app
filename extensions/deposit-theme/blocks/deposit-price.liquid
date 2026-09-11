@@ -27,7 +27,7 @@
   {%- if is_included and is_excluded == false -%}
     <div class="deposit-price-display" data-deposit-block data-deposit-eligible="true">
       <span class="deposit-price-text" style="font-size: 0.85em; color: #666;">
-        + {{ config.depositText | default: "0.10Euro per bottle" }}
+        + {{ config.depositAmount | default: "0.10" }} {{ shop.currency }} per bottle
       </span>
     </div>
   {%- endif -%}

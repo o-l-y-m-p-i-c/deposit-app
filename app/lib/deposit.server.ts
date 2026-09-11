@@ -228,7 +228,7 @@ export async function syncStorefrontMetafield(
     enabled: settings.enabled,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
-    depositText: `${(settings.amountMinor / 100).toFixed(2)}${settings.currencyCode === "EUR" ? "Euro" : settings.currencyCode} per bottle`,
+    depositAmount: (settings.amountMinor / 100).toFixed(2),
     includeTags: rules.includeTags.map((r) => r.value),
     excludeTags: rules.excludeTags.map((r) => r.value),
   };
