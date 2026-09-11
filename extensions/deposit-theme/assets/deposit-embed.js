@@ -288,7 +288,7 @@
       if (popover) {
         popover.insertAdjacentElement("afterend", depositInfo);
       } else {
-        qtyEl.appendChild(depositInfo);
+        qtyCell.appendChild(depositInfo);
       }
     }
   }
@@ -297,7 +297,7 @@
    * Main update function — runs on all page types.
    * Guarded against infinite loops from MutationObserver.
    */
-  function updatePrices() {
+  async function updatePrices() {
     if (isUpdating) return;
     isUpdating = true;
 
@@ -310,16 +310,16 @@
         updateProductPage();
       }
 
-      // Cart page and cart drawer — always check
-      updateCart();
+      // Cart page and cart drawer — always check (async)
+      await updateCart();
 
       // Product cards on collection/search pages
       if (pageType !== "product") {
         updateProductCards();
       }
     } finally {
-      // Release the guard after a short delay so async operations complete
-      setTimeout(() => { isUpdating = false; }, 500);
+      // Release the guard after async operations complete + short cooldown
+      isUpdating = false;
     }
   }
 
@@ -330,8 +330,12 @@
     updatePrices();
   }
 
+  // Retry once after 1s in case <cart-items> renders async after DOMContentLoaded
+  setTimeout(updatePrices, 1000);
+
   // Re-run on cart section re-render (AJAX cart updates)
   // Filter out mutations from our own injected elements to prevent loops
+  let observerTimeout;
   const observer = new MutationObserver((mutations) => {
     // Skip if already updating
     if (isUpdating) return;
@@ -344,8 +348,8 @@
       if (addedByUs && mutation.addedNodes.length > 0) continue;
 
       if (mutation.addedNodes.length > 0) {
-        clearTimeout(window.__depositUpdateTimer);
-        window.__depositUpdateTimer = setTimeout(updatePrices, 300);
+        clearTimeout(observerTimeout);
+        observerTimeout = setTimeout(updatePrices, 300);
         break;
       }
     }
