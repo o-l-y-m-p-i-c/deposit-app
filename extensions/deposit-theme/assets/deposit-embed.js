@@ -166,6 +166,92 @@
   }
 
   /**
+   * Annotate cart line items with deposit info.
+   * Fetches /cart.js, checks eligibility per line, and appends
+   * "incl. €0.10 deposit" text next to eligible line item prices.
+   *
+   * Works on both the cart page and AJAX cart drawers.
+   */
+  async function updateCart() {
+    let cart;
+    try {
+      const res = await fetch("/cart.js");
+      if (!res.ok) return;
+      cart = await res.json();
+    } catch (e) {
+      return;
+    }
+
+    if (!cart.items || cart.items.length === 0) return;
+
+    // Skip the deposit product itself
+    for (const item of cart.items) {
+      const handle = item.handle;
+      if (!handle) continue;
+
+      // Skip the deposit product
+      if (item.title === "Bottle Deposit" || (item.product_tags && item.product_tags.includes("deposit"))) {
+        continue;
+      }
+
+      let tags;
+      if (tagCache.has(handle)) {
+        tags = tagCache.get(handle);
+      } else {
+        try {
+          const res = await fetch(`/products/${handle}.js`);
+          if (!res.ok) continue;
+          const product = await res.json();
+          tags = product.tags || [];
+          tagCache.set(handle, tags);
+        } catch (e) {
+          continue;
+        }
+      }
+
+      if (!isEligible(tags)) continue;
+
+      // Find the DOM element for this cart line item.
+      // Match by product handle in links, or by variant ID in data attributes.
+      const variantId = String(item.variant_id);
+      const lineEls = [];
+
+      // Try data-variant-id attribute (common in Dawn and many themes)
+      document
+        .querySelectorAll(`[data-variant-id="${variantId}"], [data-cart-item-variant-id="${variantId}"]`)
+        .forEach((el) => lineEls.push(el));
+
+      // Try matching by product handle in links
+      if (lineEls.length === 0) {
+        document
+          .querySelectorAll(`a[href*="/products/${handle}"]`)
+          .forEach((link) => {
+            const row = link.closest(
+              ".cart-item, .cart__row, .cart-row, .cart-drawer__item, li, tr",
+            );
+            if (row) lineEls.push(row);
+          });
+      }
+
+      // For each matching cart line element, find the price element and annotate
+      for (const lineEl of lineEls) {
+        const priceEl = lineEl.querySelector(
+          ".cart-item__price .price-item, .cart-item__price, .cart__price .price-item, .cart__price, .cart-drawer__price, .price-item--regular, .price-item",
+        );
+        if (priceEl && !priceEl.dataset.depositAdded) {
+          const depositSpan = document.createElement("span");
+          depositSpan.className = "deposit-price-text deposit-cart-text";
+          depositSpan.style.cssText =
+            "font-size: 0.85em; color: #666; display: block; margin-top: 2px;";
+          depositSpan.textContent = `incl. ${depositText}`;
+          priceEl.appendChild(depositSpan);
+          priceEl.dataset.depositAdded = "true";
+        }
+      }
+    }
+  }
+
+  /**
    * Main update function — runs on all page types.
    */
   function updatePrices() {
@@ -175,7 +261,13 @@
 
     if (pageType === "product" || document.getElementById("deposit-product-tags")) {
       updateProductPage();
-    } else {
+    }
+
+    // Cart page and cart drawer — always check, since drawers can appear on any page
+    updateCart();
+
+    // Product cards on collection/search pages
+    if (pageType !== "product") {
       updateProductCards();
     }
   }
