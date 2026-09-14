@@ -107,7 +107,7 @@
 
     document
       .querySelectorAll(
-        ".price__regular .price-item, .price-item--regular, .product__price .price-item, .product-single__price",
+        ".price__regular .price-item, .price__sale .price-item, .price-item--regular, .price-item--sale, .product__price .price-item, .product-single__price",
       )
       .forEach(appendDepositText);
   }
@@ -131,7 +131,7 @@
       if (!card) return;
 
       const priceEl = card.querySelector(
-        ".price-item--regular, .price__regular .price-item, .card__price .price-item, .product-card__price",
+        ".price-item--sale, .price-item--regular, .price__sale .price-item, .price__regular .price-item, .card__price .price-item, .product-card__price",
       );
       if (!priceEl || priceEl.dataset.depositAdded) return;
 
