@@ -90,6 +90,22 @@
   }
 
   /**
+   * Find the visible price element(s) within a price container.
+   * When a product is on sale, Dawn hides .price__regular and shows .price__sale.
+   * We must only annotate the visible price element.
+   */
+  function findVisiblePriceElements(container) {
+    // Check if this price container is on sale
+    const priceWrapper = container.closest(".price");
+    if (priceWrapper && priceWrapper.classList.contains("price--on-sale")) {
+      // On sale: only target the sale price element (the last one, not the strikethrough)
+      return container.querySelectorAll(".price__sale .price-item--sale");
+    }
+    // Not on sale: target the regular price element
+    return container.querySelectorAll(".price__regular .price-item--regular");
+  }
+
+  /**
    * Update prices on a product page.
    */
   function updateProductPage() {
@@ -105,11 +121,12 @@
 
     if (!isEligible(productTags)) return;
 
+    // Find all price containers on the page and annotate visible price elements
     document
-      .querySelectorAll(
-        ".price__regular .price-item, .price__sale .price-item, .price-item--regular, .price-item--sale, .product__price .price-item, .product-single__price",
-      )
-      .forEach(appendDepositText);
+      .querySelectorAll(".price, .product__price, .product-single__price")
+      .forEach((priceContainer) => {
+        findVisiblePriceElements(priceContainer).forEach(appendDepositText);
+      });
   }
 
   /**
@@ -130,9 +147,13 @@
       );
       if (!card) return;
 
-      const priceEl = card.querySelector(
-        ".price-item--sale, .price-item--regular, .price__sale .price-item, .price__regular .price-item, .card__price .price-item, .product-card__price",
-      );
+      // Find the price container within this card
+      const priceContainer = card.querySelector(".price");
+      if (!priceContainer) return;
+
+      // Find the visible price element (sale or regular, not both)
+      const priceEls = findVisiblePriceElements(priceContainer);
+      const priceEl = priceEls.length > 0 ? priceEls[0] : null;
       if (!priceEl || priceEl.dataset.depositAdded) return;
 
       cardsToUpdate.push({ priceEl, handle });
