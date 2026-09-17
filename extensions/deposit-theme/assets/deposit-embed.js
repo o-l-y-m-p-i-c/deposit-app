@@ -512,6 +512,32 @@
 
   observer.observe(document.body, { childList: true, subtree: true });
 
+  // Catch every AJAX cart operation regardless of theme: wrap fetch and
+  // re-sync once the request completes. This is the reliable trigger —
+  // DOM events and observers vary by theme and can be missed.
+  const cartWriteRe = /\/cart\/(add|change|update|clear)\b/;
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === "string" ? input : input?.url || "";
+    const p = nativeFetch(input, init);
+    if (cartWriteRe.test(url)) {
+      return p.then((res) => {
+        setTimeout(updatePrices, 250);
+        return res;
+      });
+    }
+    return p;
+  };
+
+  // Dawn-style pubsub (used by Dawn, Prestige and other themes)
+  try {
+    if (typeof window.subscribe === "function" && window.PUB_SUB_EVENTS?.cartUpdate) {
+      window.subscribe(window.PUB_SUB_EVENTS.cartUpdate, () =>
+        setTimeout(updatePrices, 250),
+      );
+    }
+  } catch (e) {}
+
   // Re-run on variant change (product page)
   document.addEventListener("change", (e) => {
     if (e.target.matches('input[name="id"], select[name="id"]')) {
