@@ -242,9 +242,6 @@ export const GET_VALIDATIONS = /* GraphQL */ `#graphql
       nodes {
         id
         title
-        shopifyFunction {
-          handle
-        }
       }
     }
   }
