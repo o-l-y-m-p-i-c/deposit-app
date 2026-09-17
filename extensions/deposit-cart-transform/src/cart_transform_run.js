@@ -16,13 +16,20 @@
  * {
  *   "enabled": true,
  *   "amountMinor": 10,
- *   "currencyCode": "EUR",
+ *   "currencyCode": "€",
  *   "depositVariantId": "gid://shopify/ProductVariant/xxx",
  *   "includeTags": ["water", "bottle"],
  *   "includeCollectionIds": ["gid://shopify/Collection/xxx"],
  *   "excludeTags": ["19l-bottle"],
  *   "excludeCollectionIds": ["gid://shopify/Collection/yyy"]
  * }
+ *
+ * mode: "expand" = bundle the deposit as a line component (this function).
+ *       "line"   = deposit is a standalone cart line managed by the
+ *                  storefront script + deposit-validation function;
+ *                  this function returns no operations.
+ *       missing  = treated as "line" so old configs can't double-charge
+ *                  once the storefront script starts adding the line.
  */
 
 /**
@@ -54,6 +61,7 @@ export function cartTransformRun(input) {
   const presentmentCurrencyRate = Number(input.presentmentCurrencyRate);
   if (
     !config.enabled ||
+    config.mode !== "expand" ||
     !config.depositVariantId ||
     !Number.isFinite(amountMinor) ||
     !Number.isFinite(presentmentCurrencyRate)

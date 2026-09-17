@@ -1,0 +1,31 @@
+query CartValidationsGenerateRunInput(
+  $includeTags: [String!]
+  $includeCollectionIds: [ID!]
+  $excludeTags: [String!]
+  $excludeCollectionIds: [ID!]
+) {
+  cart {
+    lines {
+      id
+      quantity
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            id
+            hasIncludedTag: hasAnyTag(tags: $includeTags)
+            inIncludedCollection: inAnyCollection(ids: $includeCollectionIds)
+            hasExcludedTag: hasAnyTag(tags: $excludeTags)
+            inExcludedCollection: inAnyCollection(ids: $excludeCollectionIds)
+          }
+        }
+      }
+    }
+  }
+  validation {
+    metafield(namespace: "$app:deposit", key: "function-configuration") {
+      value
+    }
+  }
+}

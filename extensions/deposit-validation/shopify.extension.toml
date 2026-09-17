@@ -1,0 +1,20 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "t:name"
+handle = "deposit-validation"
+type = "function"
+uid = "a8173b30-2716-4838-9269-8df8065713cb"
+description = "t:description"
+
+  [[extensions.targeting]]
+  target = "cart.validations.generate.run"
+  input_query = "src/cart_validations_generate_run.graphql"
+  export = "cart-validations-generate-run"
+
+  [extensions.build]
+  path = "dist/function.wasm"
+
+  [extensions.input.variables]
+  namespace = "$app:deposit"
+  key = "function-configuration"

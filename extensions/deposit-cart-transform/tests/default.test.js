@@ -32,6 +32,7 @@ const input = (overrides = {}) => ({
     metafield: {
       value: JSON.stringify({
         enabled: true,
+        mode: "expand",
         amountMinor: 10,
         depositVariantId: "gid://shopify/ProductVariant/2",
       }),

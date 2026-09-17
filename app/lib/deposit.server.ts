@@ -7,16 +7,21 @@ import {
   adminGraphql,
   CREATE_CART_TRANSFORM,
   CREATE_DEPOSIT_PRODUCT,
+  CREATE_VALIDATION,
   DELETE_CART_TRANSFORM,
   DELETE_PRODUCT,
+  DELETE_VALIDATION,
   GET_CART_TRANSFORMS,
+  GET_COLLECTION_HANDLES,
   GET_DEPOSIT_PRODUCT,
+  GET_VALIDATIONS,
   SET_METAFIELDS,
   UPDATE_DEPOSIT_VARIANT,
   UPDATE_PRODUCT_STATUS,
 } from "~/lib/admin-api.server";
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
+const VALIDATION_HANDLE = "deposit-validation";
 
 /**
  * Get or create default settings for a shop.
@@ -157,14 +162,60 @@ export async function getOrCreateCartTransform(shop: string, existingId?: string
 }
 
 /**
- * Sync the deposit configuration to the Cart Transform owner metafield.
- * This is the runtime configuration the Function reads.
+ * Get or create a Validation for the shop.
+ * If `existingId` is provided, verifies it still exists in Shopify;
+ * if it was deleted (e.g. app reinstalled), a new one is created.
  */
-export async function syncCartTransformMetafield(
+export async function getOrCreateValidation(shop: string, existingId?: string | null) {
+  const existingResult = await adminGraphql(GET_VALIDATIONS, {}, shop);
+  const nodes = existingResult?.data?.validations?.nodes ?? [];
+
+  // Reuse the stored ID if it still exists
+  if (existingId) {
+    const match = nodes.find((n: { id: string }) => n.id === existingId);
+    if (match) return match;
+  }
+
+  // Reuse any existing Validation for this function
+  const owned = nodes.find(
+    (n: { shopifyFunction?: { handle?: string } }) =>
+      n.shopifyFunction?.handle === VALIDATION_HANDLE,
+  );
+  if (owned) return owned;
+
+  // Otherwise create a new one
+  const result = await adminGraphql(CREATE_VALIDATION, {
+    validation: {
+      title: "Bottle Deposit",
+      functionHandle: VALIDATION_HANDLE,
+      enable: true,
+      blockOnFailure: false,
+    },
+  }, shop);
+  const validation = result?.data?.validationCreate?.validation;
+  const errors = result?.data?.validationCreate?.userErrors;
+  if (errors?.length > 0) {
+    throw new Error(`Failed to create validation: ${JSON.stringify(errors)}`);
+  }
+  if (!validation?.id) {
+    throw new Error("Validation was created without an ID");
+  }
+  return validation;
+}
+
+/**
+ * Sync the deposit configuration to function owner metafields
+ * (Cart Transform + Validation). Both functions read the same config;
+ * `mode` decides which one acts:
+ *   "line"   — validation enforces a standalone deposit line (default)
+ *   "expand" — cart transform bundles deposit as a line component
+ */
+export async function syncFunctionMetafields(
   shop: string,
-  cartTransformId: string,
+  ownerIds: string[],
   settings: {
     enabled: boolean;
+    depositMode: string;
     amountMinor: number;
     currencyCode: string;
     depositVariantId: string | null;
@@ -178,6 +229,7 @@ export async function syncCartTransformMetafield(
 ) {
   const config = {
     enabled: settings.enabled,
+    mode: settings.depositMode,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositVariantId: settings.depositVariantId,
@@ -188,15 +240,13 @@ export async function syncCartTransformMetafield(
   };
 
   const result = await adminGraphql(SET_METAFIELDS, {
-    metafields: [
-      {
-        namespace: "$app:deposit",
-        key: "function-configuration",
-        ownerId: cartTransformId,
-        type: "json",
-        value: JSON.stringify(config),
-      },
-    ],
+    metafields: ownerIds.map((ownerId) => ({
+      namespace: "$app:deposit",
+      key: "function-configuration",
+      ownerId,
+      type: "json",
+      value: JSON.stringify(config),
+    })),
   }, shop);
 
   const errors = result?.data?.metafieldsSet?.userErrors;
@@ -218,19 +268,45 @@ export async function syncStorefrontMetafield(
     enabled: boolean;
     amountMinor: number;
     currencyCode: string;
+    depositVariantId: string | null;
   },
   rules: {
     includeTags: { value: string }[];
+    includeCollections: { resourceId: string | null; value: string }[];
     excludeTags: { value: string }[];
+    excludeCollections: { resourceId: string | null; value: string }[];
   },
 ) {
+  // Storefront JS can't evaluate collections by GID — resolve handles.
+  const collectionIds = [
+    ...rules.includeCollections.map((r) => r.resourceId),
+    ...rules.excludeCollections.map((r) => r.resourceId),
+  ].filter((id): id is string => Boolean(id));
+
+  const handleById = new Map<string, string>();
+  if (collectionIds.length > 0) {
+    const result = await adminGraphql(GET_COLLECTION_HANDLES, { ids: collectionIds }, shop);
+    for (const node of result?.data?.nodes ?? []) {
+      if (node?.id && node?.handle) handleById.set(node.id, node.handle);
+    }
+  }
+
   const config = {
     enabled: settings.enabled,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositAmount: (settings.amountMinor / 100).toFixed(2),
+    depositVariantId: settings.depositVariantId
+      ? Number(settings.depositVariantId.split("/").pop())
+      : null,
     includeTags: rules.includeTags.map((r) => r.value),
     excludeTags: rules.excludeTags.map((r) => r.value),
+    includeCollections: rules.includeCollections
+      .map((r) => (r.resourceId ? handleById.get(r.resourceId) : undefined))
+      .filter(Boolean),
+    excludeCollections: rules.excludeCollections
+      .map((r) => (r.resourceId ? handleById.get(r.resourceId) : undefined))
+      .filter(Boolean),
   };
 
   const result = await adminGraphql(SET_METAFIELDS, {
@@ -281,27 +357,38 @@ export async function fullSync(shop: string, appInstallationId: string) {
   }
 
   try {
-    // Always verify the Cart Transform still exists in Shopify.
-    // It can be deleted when the app is reinstalled, leaving a stale ID.
+    // Always verify the Cart Transform + Validation still exist in Shopify.
+    // They can be deleted when the app is reinstalled, leaving a stale ID.
     const cartTransform = await getOrCreateCartTransform(shop, settings.cartTransformId);
     let cartTransformId = cartTransform.id;
     if (cartTransformId !== settings.cartTransformId) {
-      settings = await prisma.depositSettings.update({
-        where: { shopId: shop },
-        data: { cartTransformId },
-      });
       await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
     }
+
+    const validation = await getOrCreateValidation(shop, settings.validationId);
+    const validationId = validation.id;
+    if (validationId !== settings.validationId) {
+      await log("create_validation", "success", `Validation ready: ${validationId}`);
+    }
+
+    if (cartTransformId !== settings.cartTransformId || validationId !== settings.validationId) {
+      settings = await prisma.depositSettings.update({
+        where: { shopId: shop },
+        data: { cartTransformId, validationId },
+      });
+    }
+
     const rules = await getRulesGrouped(shop);
-    await syncCartTransformMetafield(shop, cartTransformId, {
+    await syncFunctionMetafields(shop, [cartTransformId, validationId], {
       enabled: settings.enabled,
+      depositMode: settings.depositMode,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
       depositVariantId: settings.depositVariantId,
     }, rules);
-    await log("sync_metafields", "success", "Cart Transform metafield synced");
+    await log("sync_metafields", "success", "Function metafields synced");
   } catch (error) {
-    await log("sync_cart_transform", "error", String(error));
+    await log("sync_functions", "error", String(error));
     throw error;
   }
 
@@ -311,6 +398,7 @@ export async function fullSync(shop: string, appInstallationId: string) {
       enabled: settings.enabled,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
+      depositVariantId: settings.depositVariantId,
     }, storefrontRules);
     await log("sync_storefront", "success", "Storefront metafield synced");
   } catch (error) {
@@ -334,8 +422,9 @@ export async function fullSync(shop: string, appInstallationId: string) {
  *
  * Steps:
  * 1. Delete the Cart Transform (stops the Function from running)
- * 2. Delete the deposit product (removes the €0.10 variant from the catalog)
- * 3. Delete all rules and settings from the database
+ * 2. Delete the Validation (unlocks checkout)
+ * 3. Delete the deposit product (removes the €0.10 variant from the catalog)
+ * 4. Delete all rules and settings from the database
  *
  * Metafields in the $app:deposit namespace are auto-deleted by Shopify
  * on uninstall, so we don't need to remove them manually.
@@ -366,7 +455,24 @@ export async function cleanupShop(shop: string) {
     }
   }
 
-  // 2. Delete the deposit product
+  // 2. Delete the Validation
+  if (settings?.validationId) {
+    try {
+      const result = await adminGraphql(DELETE_VALIDATION, {
+        id: settings.validationId,
+      }, shop);
+      const errors = result?.data?.validationDelete?.userErrors;
+      if (errors?.length > 0) {
+        await log("delete_validation", "warning", `Errors: ${JSON.stringify(errors)}`);
+      } else {
+        await log("delete_validation", "success", `Deleted ${settings.validationId}`);
+      }
+    } catch (error) {
+      await log("delete_validation", "warning", String(error));
+    }
+  }
+
+  // 3. Delete the deposit product
   if (settings?.depositProductId) {
     try {
       const result = await adminGraphql(DELETE_PRODUCT, {
@@ -384,7 +490,7 @@ export async function cleanupShop(shop: string) {
     }
   }
 
-  // 3. Delete all rules and settings from the database
+  // 4. Delete all rules and settings from the database
   await prisma.depositRule.deleteMany({ where: { shopId: shop } });
   await prisma.depositSettings.deleteMany({ where: { shopId: shop } });
   await log("cleanup_db", "success", "Deleted all rules and settings");
