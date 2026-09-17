@@ -234,6 +234,56 @@ export const GET_CART_TRANSFORMS = /* GraphQL */ `#graphql
 `;
 
 /**
+ * List Validation objects owned by this app.
+ */
+export const GET_VALIDATIONS = /* GraphQL */ `#graphql
+  query GetValidations {
+    validations(first: 100) {
+      nodes {
+        id
+        title
+        shopifyFunction {
+          handle
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Create a Validation linked by the deployed Function handle.
+ */
+export const CREATE_VALIDATION = /* GraphQL */ `#graphql
+  mutation CreateValidation($validation: ValidationCreateInput!) {
+    validationCreate(validation: $validation) {
+      validation {
+        id
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
+ * Delete a Validation by ID.
+ * Called during cleanup before app uninstall.
+ */
+export const DELETE_VALIDATION = /* GraphQL */ `#graphql
+  mutation DeleteValidation($id: ID!) {
+    validationDelete(id: $id) {
+      deletedId
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
  * Create a Cart Transform linked by the deployed Function handle.
  */
 export const CREATE_CART_TRANSFORM = /* GraphQL */ `#graphql
@@ -302,6 +352,21 @@ export const GET_COLLECTIONS = /* GraphQL */ `#graphql
           title
           handle
         }
+      }
+    }
+  }
+`;
+
+/**
+ * Get collection handles by IDs — used to expose collection rules
+ * to the storefront script (which can't read collection GIDs).
+ */
+export const GET_COLLECTION_HANDLES = /* GraphQL */ `#graphql
+  query GetCollectionHandles($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Collection {
+        id
+        handle
       }
     }
   }

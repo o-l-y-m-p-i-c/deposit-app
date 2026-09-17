@@ -1,18 +1,19 @@
 /**
  * Deposit Price Display — Storefront Script
  *
- * Finds price elements on the storefront and appends deposit text
- * in the format: "+ 0.10 EUR per bottle"
+ * 1. Appends "+ 0.10 EUR per bottle" text on eligible product prices
+ *    (product pages, product cards).
  *
- * Only shows deposit text on eligible products (matching include tags,
- * not matching exclude tags).
+ * 2. Manages the deposit as a real cart line ("line" mode):
+ *    - Auto-adds the deposit product when eligible items are in the cart
+ *    - Keeps its quantity equal to the total eligible quantity
+ *    - Removes it when no eligible items remain
+ *    - Hides quantity/remove controls on the deposit row
+ *    The deposit-validation Function enforces the same rule at checkout,
+ *    so tampering with the line can't bypass the deposit.
  *
- * Works on:
- * - Product pages: reads product tags from #deposit-product-tags
- * - Product cards (collection/search pages): fetches product tags via
- *   /products/{handle}.js and caches results
- * - Cart page & cart drawer: injects deposit info inside the quantity
- *   cell, under <quantity-popover>
+ * Eligibility mirrors the server: product tags via /products/{handle}.js,
+ * collection membership via /collections/{handle}/products.json.
  */
 
 (function () {
@@ -23,13 +24,16 @@
     enabled: false,
     depositAmount: "0.10",
     currencyCode: "EUR",
+    depositVariantId: null,
     includeTags: [],
     excludeTags: [],
+    includeCollections: [],
+    excludeCollections: [],
   };
 
   if (configScript) {
     try {
-      config = JSON.parse(configScript.textContent);
+      config = Object.assign(config, JSON.parse(configScript.textContent));
     } catch (e) {
       // Fall back to defaults
     }
@@ -46,14 +50,24 @@
 
   const depositText = `${config.depositAmount} ${shopCurrency} per bottle`;
 
+  const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
+
   const includeTags = (config.includeTags || []).map((t) => t.toLowerCase());
   const excludeTags = (config.excludeTags || []).map((t) => t.toLowerCase());
+  const includeCollections = config.includeCollections || [];
+  const excludeCollections = config.excludeCollections || [];
 
   // Cache of product handle -> tags
   const tagCache = new Map();
+  // Cache of collection handle -> Promise<Set<productHandle>>
+  const collectionCache = new Map();
+  // Handle of the deposit product (read from cart, for row detection)
+  let depositHandle = null;
 
   // Guard flag to prevent infinite MutationObserver loop
   let isUpdating = false;
+  // Guard flag to prevent overlapping cart syncs
+  let isSyncing = false;
 
   /**
    * Format a number in European style (e.g., 0.10 -> "0,10")
@@ -65,12 +79,91 @@
   /**
    * Check if a product is eligible for deposit based on its tags.
    */
-  function isEligible(tags) {
+  function isEligibleTags(tags) {
     if (!Array.isArray(tags)) return false;
     const lower = tags.map((t) => t.toLowerCase());
     const included = includeTags.some((t) => lower.includes(t));
     const excluded = excludeTags.some((t) => lower.includes(t));
-    return included && !excluded;
+    return { included, excluded };
+  }
+
+  /**
+   * Fetch product tags for a handle (cached).
+   */
+  async function getProductTags(handle) {
+    if (tagCache.has(handle)) return tagCache.get(handle);
+    try {
+      const res = await fetch(`/products/${handle}.js`);
+      if (!res.ok) {
+        tagCache.set(handle, []);
+        return [];
+      }
+      const product = await res.json();
+      const tags = product.tags || [];
+      tagCache.set(handle, tags);
+      return tags;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /**
+   * Fetch the set of product handles in a collection (cached).
+   * Uses the storefront JSON endpoint /collections/{handle}/products.json.
+   */
+  function getCollectionProducts(handle) {
+    if (collectionCache.has(handle)) return collectionCache.get(handle);
+    const promise = (async () => {
+      const handles = new Set();
+      try {
+        for (let page = 1; page <= 10; page++) {
+          const res = await fetch(
+            `/collections/${handle}/products.json?limit=250&page=${page}`,
+          );
+          if (!res.ok) break;
+          const data = await res.json();
+          const products = data.products || [];
+          products.forEach((p) => handles.add(p.handle));
+          if (products.length < 250) break;
+        }
+      } catch (e) {
+        // Endpoint unavailable — treat as empty
+      }
+      return handles;
+    })();
+    collectionCache.set(handle, promise);
+    return promise;
+  }
+
+  async function inCollection(productHandle, collectionHandles) {
+    for (const h of collectionHandles) {
+      const set = await getCollectionProducts(h);
+      if (set.has(productHandle)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Full eligibility check mirroring the Function:
+   *   included = tag match OR collection match
+   *   excluded = tag match OR collection match
+   *   eligible = included && !excluded
+   */
+  async function isEligibleItem(item) {
+    const handle = item.handle;
+    if (!handle) return false;
+
+    const { included: tagIn, excluded: tagOut } = isEligibleTags(
+      await getProductTags(handle),
+    );
+
+    const included =
+      tagIn || (await inCollection(handle, includeCollections));
+    if (!included) return false;
+
+    const excluded =
+      tagOut || (await inCollection(handle, excludeCollections));
+    return !excluded;
   }
 
   /**
@@ -119,7 +212,8 @@
       return;
     }
 
-    if (!isEligible(productTags)) return;
+    const { included, excluded } = isEligibleTags(productTags);
+    if (!included || excluded) return;
 
     // Find all price containers on the page and annotate visible price elements
     document
@@ -162,202 +256,193 @@
     const handles = [...new Set(cardsToUpdate.map((c) => c.handle))];
 
     handles.forEach(async (handle) => {
-      let tags;
-      if (tagCache.has(handle)) {
-        tags = tagCache.get(handle);
-      } else {
-        try {
-          const res = await fetch(`/products/${handle}.js`);
-          if (!res.ok) return;
-          const product = await res.json();
-          tags = product.tags || [];
-          tagCache.set(handle, tags);
-        } catch (e) {
-          return;
-        }
-      }
-      if (!isEligible(tags)) return;
+      const tags = await getProductTags(handle);
+      const { included, excluded } = isEligibleTags(tags);
+      if (!included || excluded) return;
       cardsToUpdate
         .filter((c) => c.handle === handle)
         .forEach((c) => appendDepositText(c.priceEl));
     });
   }
 
-  /**
-   * Find ALL <tr> cart rows for a given cart line item.
-   * On the cart page, both the cart table AND the cart drawer are in the DOM,
-   * so we need to find and inject into both.
-   *
-   * Dawn theme uses:
-   *   Cart page:  <tr class="cart-item" id="CartItem-{index}">
-   *   Cart drawer: <tr class="cart-item" id="CartDrawer-Item-{index}">
-   */
-  function findCartRows(item) {
-    const key = item.key;
-    const index = item.line;
-    const rows = [];
+  // ------------------------------------------------------------------
+  // Deposit cart line sync ("line" mode)
+  // ------------------------------------------------------------------
 
-    // Strategy 1: Find by quantity input with data-quantity-line-key
-    if (key) {
-      document
-        .querySelectorAll(`input[data-quantity-line-key="${key}"]`)
-        .forEach((input) => {
-          const row = input.closest("tr.cart-item");
-          if (row && !rows.includes(row)) rows.push(row);
-        });
+  const CART_SECTIONS = "cart-drawer,main-cart-items,cart-icon-bubble";
+
+  async function postCart(url, body) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    try {
+      return await res.json();
+    } catch (e) {
+      return null;
     }
-
-    // Strategy 2: Find by data-index on the input
-    if (rows.length === 0 && index) {
-      document
-        .querySelectorAll(`input[data-index="${index}"]`)
-        .forEach((input) => {
-          const row = input.closest("tr.cart-item");
-          if (row && !rows.includes(row)) rows.push(row);
-        });
-    }
-
-    // Strategy 3: Find by product link inside tr.cart-item
-    if (rows.length === 0) {
-      document
-        .querySelectorAll(`tr.cart-item a[href*="/products/${item.handle}"]`)
-        .forEach((link) => {
-          const row = link.closest("tr.cart-item");
-          if (row && !rows.includes(row)) rows.push(row);
-        });
-    }
-
-    return rows;
   }
 
   /**
-   * Inject a separate "Bottle Deposit" <tr> row after each eligible
-   * product line in the cart — same style as checkout.
-   *
-   * Dawn theme compatible:
-   *   Cart page:  5 columns (media, details, mobile-totals, qty, desktop-totals)
-   *   Cart drawer: 4 columns (media, details, totals, qty)
+   * Re-render cart UI after a programmatic cart change.
+   * Dawn listens to PUB_SUB_EVENTS.cartUpdate; other themes use DOM events.
    */
-  async function updateCart() {
-    let cart;
+  function refreshCartUi(cartData) {
+    try {
+      if (
+        typeof window.publish === "function" &&
+        window.PUB_SUB_EVENTS?.cartUpdate &&
+        cartData?.sections
+      ) {
+        window.publish(window.PUB_SUB_EVENTS.cartUpdate, {
+          source: "deposit-sync",
+          cartData,
+        });
+      }
+    } catch (e) {
+      // Not a pubsub theme — fall through to DOM events
+    }
+    document.dispatchEvent(new CustomEvent("cart:updated", { detail: { cart: cartData } }));
+    document.dispatchEvent(new CustomEvent("cart:refresh"));
+  }
+
+  /**
+   * Ensure the deposit line exists and its quantity equals the total
+   * quantity of eligible items. Idempotent — only writes on mismatch.
+   */
+  async function syncDepositLine() {
+    if (!DEPOSIT_VARIANT_ID || isSyncing) return;
+    isSyncing = true;
+
     try {
       const res = await fetch("/cart.js");
       if (!res.ok) return;
-      cart = await res.json();
+      const cart = await res.json();
+
+      let expected = 0;
+      let depositLine = null;
+
+      for (const item of cart.items || []) {
+        if (item.variant_id === DEPOSIT_VARIANT_ID) {
+          depositLine = item;
+          depositHandle = item.handle || depositHandle;
+          continue;
+        }
+        if (await isEligibleItem(item)) {
+          expected += item.quantity;
+        }
+      }
+
+      let cartData = null;
+      if (expected > 0 && !depositLine) {
+        cartData = await postCart("/cart/add.js", {
+          items: [{ id: DEPOSIT_VARIANT_ID, quantity: expected }],
+          sections: CART_SECTIONS,
+          sections_url: window.location.pathname,
+        });
+      } else if (depositLine && depositLine.quantity !== expected) {
+        cartData = await postCart("/cart/change.js", {
+          id: depositLine.key,
+          quantity: expected,
+          sections: CART_SECTIONS,
+          sections_url: window.location.pathname,
+        });
+      } else if (expected === 0 && depositLine) {
+        cartData = await postCart("/cart/change.js", {
+          id: depositLine.key,
+          quantity: 0,
+          sections: CART_SECTIONS,
+          sections_url: window.location.pathname,
+        });
+      }
+
+      if (cartData) {
+        refreshCartUi(cartData);
+      }
+      lockDepositRows();
     } catch (e) {
-      return;
+      // Sync failures are non-fatal — the validation function still
+      // enforces the deposit at checkout.
+    } finally {
+      isSyncing = false;
+    }
+  }
+
+  /**
+   * Inject the CSS that hides interactive controls on the deposit row.
+   */
+  function injectLockStyles() {
+    if (document.getElementById("deposit-lock-styles")) return;
+    const style = document.createElement("style");
+    style.id = "deposit-lock-styles";
+    style.textContent = `
+      .deposit-line-locked quantity-input,
+      .deposit-line-locked quantity-popover,
+      .deposit-line-locked cart-remove-button,
+      .deposit-line-locked .cart-item__quantity-wrapper,
+      .deposit-line-locked .cart-item__remove,
+      .deposit-line-locked .quantity { display: none !important; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /**
+   * Lock a single deposit cart row: hide qty input + remove button,
+   * show the quantity as static text.
+   */
+  function lockRow(row) {
+    if (!row || row.dataset.depositLocked === "true") return;
+    row.dataset.depositLocked = "true";
+    row.classList.add("deposit-line-locked");
+
+    const qtyInput = row.querySelector(
+      "input[name='updates[]'], input[data-quantity-line-key]",
+    );
+    const qty = qtyInput?.value || "";
+    const qtyCell =
+      row.querySelector(".cart-item__quantity") || qtyInput?.closest("td");
+    if (qtyCell && !qtyCell.querySelector(".deposit-qty-static")) {
+      const span = document.createElement("span");
+      span.className = "deposit-qty-static";
+      span.style.cssText = "font-size: 0.9em; color: #666;";
+      span.textContent = qty;
+      qtyCell.appendChild(span);
+    }
+  }
+
+  /**
+   * Find the deposit row in the rendered cart (page + drawer) and lock it.
+   * Dawn quantity inputs carry data-quantity-line-key="{variantId}:{hash}".
+   * Fallback: match the product link href to the deposit handle.
+   */
+  function lockDepositRows() {
+    if (!DEPOSIT_VARIANT_ID) return;
+    injectLockStyles();
+
+    const prefix = `${DEPOSIT_VARIANT_ID}:`;
+    const rows = new Set();
+
+    document
+      .querySelectorAll("[data-quantity-line-key]")
+      .forEach((el) => {
+        const key = el.getAttribute("data-quantity-line-key") || "";
+        if (!key.startsWith(prefix)) return;
+        const row = el.closest("tr.cart-item, .cart-item, tr, li");
+        if (row) rows.add(row);
+      });
+
+    if (depositHandle) {
+      document
+        .querySelectorAll(`a[href*="/products/${depositHandle}"]`)
+        .forEach((a) => {
+          const row = a.closest("tr.cart-item, .cart-item");
+          if (row) rows.add(row);
+        });
     }
 
-    if (!cart.items || cart.items.length === 0) return;
-
-    // Remove previously injected deposit rows (clean slate for re-render)
-    document.querySelectorAll('tr[data-deposit-line="true"]').forEach((el) => {
-      el.remove();
-    });
-
-    for (const item of cart.items) {
-      const handle = item.handle;
-      if (!handle) continue;
-
-      // Skip the deposit product itself
-      if (item.title === "Bottle Deposit" || handle === "bottle-deposit") {
-        continue;
-      }
-
-      let tags;
-      if (tagCache.has(handle)) {
-        tags = tagCache.get(handle);
-      } else {
-        try {
-          const res = await fetch(`/products/${handle}.js`);
-          if (!res.ok) continue;
-          const product = await res.json();
-          tags = product.tags || [];
-          tagCache.set(handle, tags);
-        } catch (e) {
-          continue;
-        }
-      }
-
-      if (!isEligible(tags)) continue;
-
-      // Find ALL <tr> cart rows (cart page + cart drawer may both be in DOM)
-      const lineEls = findCartRows(item);
-      if (lineEls.length === 0) continue;
-
-      // Deposit amount for this line
-      const depositPerUnit = parseFloat(config.depositAmount) || 0;
-      const depositTotal = (depositPerUnit * item.quantity).toFixed(2);
-      const depositTotalFormatted = formatPrice(depositTotal);
-      const productTitle = item.product_title || item.title;
-
-      // Inject a deposit row after each matching product row
-      for (const lineEl of lineEls) {
-        // Skip if this row already has a deposit row after it
-        const next = lineEl.nextElementSibling;
-        if (next && next.dataset.depositLine === "true" && next.dataset.depositFor === handle) {
-          continue;
-        }
-
-        // Detect cart type: drawer vs page
-        const isDrawer = lineEl.id.startsWith("CartDrawer-");
-
-        // Build the deposit <tr> with matching column structure
-        const depositRow = document.createElement("tr");
-        depositRow.className = "cart-item";
-        depositRow.dataset.depositLine = "true";
-        depositRow.dataset.depositFor = handle;
-        depositRow.style.cssText = "opacity: 0.7; border-top: 1px dashed rgba(0,0,0,0.08);";
-
-        if (isDrawer) {
-          // Cart drawer: 4 columns (media, details, totals, quantity)
-          depositRow.innerHTML = `
-            <td class="cart-item__media" role="cell" headers="CartDrawer-ColumnProductImage"></td>
-            <td class="cart-item__details" role="cell" headers="CartDrawer-ColumnProduct">
-              <div class="cart-item__title">
-                <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
-              </div>
-              <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
-            </td>
-            <td class="cart-item__totals right" role="cell" headers="CartDrawer-ColumnTotal">
-              <div class="cart-item__price-wrapper">
-                <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-              </div>
-            </td>
-            <td class="cart-item__quantity" role="cell" headers="CartDrawer-ColumnQuantity">
-              <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
-            </td>
-          `;
-        } else {
-          // Cart page: 5 columns (media, details, mobile-totals, quantity, desktop-totals)
-          depositRow.innerHTML = `
-            <td class="cart-item__media"></td>
-            <td class="cart-item__details">
-              <div class="cart-item__title">
-                <span class="cart-item__name h4 break" style="font-size: 0.9em; font-weight: 500;">Bottle Deposit</span>
-              </div>
-              <div class="product-option" style="font-size: 0.8em; color: #666;">Included with ${productTitle}</div>
-            </td>
-            <td class="cart-item__totals right medium-hide large-up-hide">
-              <div class="cart-item__price-wrapper">
-                <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-              </div>
-            </td>
-            <td class="cart-item__quantity">
-              <span style="font-size: 0.9em; color: #666;">${item.quantity}</span>
-            </td>
-            <td class="cart-item__totals right small-hide">
-              <div class="cart-item__price-wrapper">
-                <span class="price price--end">${depositTotalFormatted} ${shopCurrency}</span>
-              </div>
-            </td>
-          `;
-        }
-
-        // Insert after the product row
-        lineEl.parentNode.insertBefore(depositRow, lineEl.nextSibling);
-      }
-    }
+    rows.forEach(lockRow);
   }
 
   /**
@@ -377,8 +462,8 @@
         updateProductPage();
       }
 
-      // Cart page and cart drawer — always check (async)
-      await updateCart();
+      // Sync the deposit line + re-lock controls (async)
+      await syncDepositLine();
 
       // Product cards on collection/search pages
       if (pageType !== "product") {
@@ -410,7 +495,10 @@
     for (const mutation of mutations) {
       // Skip mutations that only involve our own elements
       const addedByUs = Array.from(mutation.addedNodes).every(
-        (n) => n.nodeType === 1 && n.dataset && n.dataset.depositLine === "true",
+        (n) =>
+          n.nodeType === 1 &&
+          (n.dataset?.depositLine === "true" ||
+            n.classList?.contains("deposit-qty-static")),
       );
       if (addedByUs && mutation.addedNodes.length > 0) continue;
 

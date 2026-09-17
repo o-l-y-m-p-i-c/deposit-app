@@ -44,6 +44,8 @@ model DepositSettings {
   depositProductId  String?  // Shopify product GID
   depositVariantId  String?  // Shopify variant GID
   cartTransformId   String?  // Shopify cart transform GID
+  validationId      String?  // Shopify validation GID
+  depositMode       String   @default("line") // "line" = separate cart line | "expand" = line component
   bottleCountMode   String   @default("single") // "single" | "metafield"
   bottleCountKey    String?  // metafield key for bottle count, e.g. "bottles_per_unit"
   lastSyncedAt      DateTime?
