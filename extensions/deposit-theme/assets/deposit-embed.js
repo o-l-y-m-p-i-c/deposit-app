@@ -66,6 +66,8 @@
 
   // Guard flag to prevent infinite MutationObserver loop
   let isUpdating = false;
+  // Set when a mutation arrives mid-update — re-run once afterwards
+  let pendingUpdate = false;
   // Guard flag to prevent overlapping cart syncs
   let isSyncing = false;
   // Backoff state — failed writes must not retry in a hot loop
@@ -499,8 +501,13 @@
         updateProductCards();
       }
     } finally {
-      // Release the guard after async operations complete + short cooldown
+      // Release the guard; if mutations arrived while we were working,
+      // run once more so no cart change is ever missed
       isUpdating = false;
+      if (pendingUpdate) {
+        pendingUpdate = false;
+        updatePrices();
+      }
     }
   }
 
@@ -518,9 +525,6 @@
   // Filter out mutations from our own injected elements to prevent loops
   let observerTimeout;
   const observer = new MutationObserver((mutations) => {
-    // Skip if already updating
-    if (isUpdating) return;
-
     for (const mutation of mutations) {
       // Skip mutations that only involve our own elements
       const addedByUs = Array.from(mutation.addedNodes).every(
@@ -533,6 +537,10 @@
       if (addedByUs && mutation.addedNodes.length > 0) continue;
 
       if (mutation.addedNodes.length > 0) {
+        if (isUpdating) {
+          pendingUpdate = true;
+          return;
+        }
         clearTimeout(observerTimeout);
         observerTimeout = setTimeout(updatePrices, 300);
         break;
@@ -557,6 +565,15 @@
       });
     }
     return p;
+  };
+
+  // Same for XMLHttpRequest — some themes (and jQuery.ajax) use XHR
+  const NativeXHROpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    if (cartWriteRe.test(String(url))) {
+      this.addEventListener("loadend", () => setTimeout(updatePrices, 250));
+    }
+    return NativeXHROpen.apply(this, arguments);
   };
 
   // Dawn-style pubsub (used by Dawn, Prestige and other themes)

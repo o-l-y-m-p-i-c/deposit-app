@@ -13,7 +13,9 @@ import {
   GET_CART_TRANSFORMS,
   GET_COLLECTION_HANDLES,
   GET_DEPOSIT_PRODUCT,
+  GET_PUBLICATIONS,
   GET_VALIDATIONS,
+  PUBLISH_PRODUCT,
   SET_METAFIELDS,
   UPDATE_DEPOSIT_VARIANT,
   UPDATE_PRODUCT_STATUS,
@@ -125,6 +127,32 @@ export async function updateDepositPrice(
     throw new Error(`Failed to update deposit variant: ${JSON.stringify(errors)}`);
   }
   return result?.data?.productVariantsBulkUpdate?.productVariants?.[0];
+}
+
+/**
+ * Publish the deposit product to the Online Store sales channel.
+ * Without this the Ajax Cart API returns "Cannot find variant" —
+ * products created via Admin API aren't channel-published by default.
+ * Idempotent: publishing an already-published product is a no-op.
+ */
+export async function publishDepositProduct(shop: string, productId: string) {
+  const pubsResult = await adminGraphql(GET_PUBLICATIONS, {}, shop);
+  const pubs = pubsResult?.data?.publications?.nodes ?? [];
+  const onlineStore = pubs.find(
+    (p: { name?: string }) => p.name === "Online Store",
+  );
+  if (!onlineStore?.id) {
+    throw new Error("Online Store publication not found");
+  }
+
+  const result = await adminGraphql(PUBLISH_PRODUCT, {
+    id: productId,
+    input: [{ publicationId: onlineStore.id }],
+  }, shop);
+  const errors = result?.data?.publishablePublish?.userErrors;
+  if (errors?.length > 0) {
+    throw new Error(`Failed to publish deposit product: ${JSON.stringify(errors)}`);
+  }
 }
 
 /**
@@ -330,6 +358,10 @@ export async function fullSync(shop: string, appInstallationId: string) {
       ({ productId, variantId } = await createDepositProduct(shop, settings.amountMinor));
       await log("create_deposit_product", "success", `Product ready: ${productId}`);
     }
+    // Line mode adds the deposit via the Ajax Cart API, which requires
+    // the product to be published to the Online Store channel.
+    await publishDepositProduct(shop, productId);
+    await log("publish_deposit_product", "success", "Published to Online Store");
     settings = await prisma.depositSettings.update({
       where: { shopId: shop },
       data: { depositProductId: productId, depositVariantId: variantId },

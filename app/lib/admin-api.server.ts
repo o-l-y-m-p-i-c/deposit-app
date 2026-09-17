@@ -297,6 +297,41 @@ export const CREATE_CART_TRANSFORM = /* GraphQL */ `#graphql
   }
 `;
 
+/**
+ * List sales-channel publications — used to find the Online Store
+ * publication so the deposit product can be added via the Ajax Cart API.
+ */
+export const GET_PUBLICATIONS = /* GraphQL */ `#graphql
+  query GetPublications {
+    publications(first: 20) {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+`;
+
+/**
+ * Publish a product to a publication (e.g. Online Store).
+ * Idempotent — succeeds if already published.
+ */
+export const PUBLISH_PRODUCT = /* GraphQL */ `#graphql
+  mutation PublishProduct($id: ID!, $input: [PublicationInput!]!) {
+    publishablePublish(id: $id, input: $input) {
+      publishable {
+        ... on Product {
+          id
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 export const GET_CURRENT_APP_INSTALLATION = /* GraphQL */ `#graphql
   query GetCurrentAppInstallation {
     currentAppInstallation {
