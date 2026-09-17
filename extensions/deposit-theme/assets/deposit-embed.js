@@ -68,6 +68,16 @@
   let isUpdating = false;
   // Guard flag to prevent overlapping cart syncs
   let isSyncing = false;
+  // Backoff state — failed writes must not retry in a hot loop
+  // (a 429 or network flake would otherwise self-amplify into
+  // Cloudflare rate limits)
+  let consecutiveFailures = 0;
+  let syncCooldownUntil = 0;
+
+  // Native fetch handle — our own cart writes must NOT go through the
+  // wrapped window.fetch below, or every write would re-trigger a sync
+  // and loop forever.
+  const nativeFetch = window.fetch.bind(window);
 
   /**
    * Format a number in European style (e.g., 0.10 -> "0,10")
@@ -89,48 +99,47 @@
 
   /**
    * Fetch product tags for a handle (cached).
+   * Throws on transient failures — the caller must decide whether a
+   * missing eligibility signal is safe to act on.
    */
   async function getProductTags(handle) {
     if (tagCache.has(handle)) return tagCache.get(handle);
-    try {
-      const res = await fetch(`/products/${handle}.js`);
-      if (!res.ok) {
+    const res = await nativeFetch(`/products/${handle}.js`);
+    if (!res.ok) {
+      if (res.status === 404) {
         tagCache.set(handle, []);
         return [];
       }
-      const product = await res.json();
-      const tags = product.tags || [];
-      tagCache.set(handle, tags);
-      return tags;
-    } catch (e) {
-      return [];
+      throw new Error(`product fetch ${res.status}`);
     }
+    const product = await res.json();
+    const tags = product.tags || [];
+    tagCache.set(handle, tags);
+    return tags;
   }
 
   /**
    * Fetch the set of product handles in a collection (cached).
-   * Uses the storefront JSON endpoint /collections/{handle}/products.json.
+   * Throws on transient failures — partial data would produce a wrong
+   * eligibility answer, so we abort instead of guessing.
    */
   function getCollectionProducts(handle) {
     if (collectionCache.has(handle)) return collectionCache.get(handle);
     const promise = (async () => {
       const handles = new Set();
-      try {
-        for (let page = 1; page <= 10; page++) {
-          const res = await fetch(
-            `/collections/${handle}/products.json?limit=250&page=${page}`,
-          );
-          if (!res.ok) break;
-          const data = await res.json();
-          const products = data.products || [];
-          products.forEach((p) => handles.add(p.handle));
-          if (products.length < 250) break;
-        }
-      } catch (e) {
-        // Endpoint unavailable — treat as empty
+      for (let page = 1; page <= 10; page++) {
+        const res = await nativeFetch(
+          `/collections/${handle}/products.json?limit=250&page=${page}`,
+        );
+        if (!res.ok) throw new Error(`collection fetch ${res.status}`);
+        const data = await res.json();
+        const products = data.products || [];
+        products.forEach((p) => handles.add(p.handle));
+        if (products.length < 250) break;
       }
       return handles;
     })();
+    promise.catch(() => collectionCache.delete(handle));
     collectionCache.set(handle, promise);
     return promise;
   }
@@ -256,7 +265,12 @@
     const handles = [...new Set(cardsToUpdate.map((c) => c.handle))];
 
     handles.forEach(async (handle) => {
-      const tags = await getProductTags(handle);
+      let tags;
+      try {
+        tags = await getProductTags(handle);
+      } catch (e) {
+        return;
+      }
       const { included, excluded } = isEligibleTags(tags);
       if (!included || excluded) return;
       cardsToUpdate
@@ -272,12 +286,19 @@
   const CART_SECTIONS = "cart-drawer,main-cart-items,cart-icon-bubble";
 
   async function postCart(url, body) {
-    const res = await fetch(url, {
+    // nativeFetch — bypass the wrapped window.fetch so our own writes
+    // don't re-trigger a sync
+    const res = await nativeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const err = new Error(`cart write ${res.status}`);
+      // @ts-ignore attach for backoff logic
+      err.status = res.status;
+      throw err;
+    }
     try {
       return await res.json();
     } catch (e) {
@@ -311,14 +332,17 @@
   /**
    * Ensure the deposit line exists and its quantity equals the total
    * quantity of eligible items. Idempotent — only writes on mismatch.
+   * Backs off on failures so a rate-limited or flaky network can't
+   * turn the sync into a request storm.
    */
   async function syncDepositLine() {
     if (!DEPOSIT_VARIANT_ID || isSyncing) return;
+    if (Date.now() < syncCooldownUntil) return;
     isSyncing = true;
 
     try {
-      const res = await fetch("/cart.js");
-      if (!res.ok) return;
+      const res = await nativeFetch("/cart.js");
+      if (!res.ok) throw new Error(`cart read ${res.status}`);
       const cart = await res.json();
 
       let expected = 0;
@@ -330,6 +354,7 @@
           depositHandle = item.handle || depositHandle;
           continue;
         }
+        // Throws on transient fetch failures → abort without writing
         if (await isEligibleItem(item)) {
           expected += item.quantity;
         }
@@ -358,13 +383,17 @@
         });
       }
 
+      consecutiveFailures = 0;
       if (cartData) {
         refreshCartUi(cartData);
       }
       lockDepositRows();
     } catch (e) {
-      // Sync failures are non-fatal — the validation function still
-      // enforces the deposit at checkout.
+      // Any failure (rate limit, network, eligibility fetch) → back off
+      // exponentially, capped at 60s. Never write based on partial data.
+      consecutiveFailures += 1;
+      const delay = Math.min(60000, 2000 * Math.pow(2, consecutiveFailures));
+      syncCooldownUntil = Date.now() + delay;
     } finally {
       isSyncing = false;
     }
@@ -498,7 +527,8 @@
         (n) =>
           n.nodeType === 1 &&
           (n.dataset?.depositLine === "true" ||
-            n.classList?.contains("deposit-qty-static")),
+            n.classList?.contains("deposit-qty-static") ||
+            n.id === "deposit-lock-styles"),
       );
       if (addedByUs && mutation.addedNodes.length > 0) continue;
 
@@ -515,8 +545,8 @@
   // Catch every AJAX cart operation regardless of theme: wrap fetch and
   // re-sync once the request completes. This is the reliable trigger —
   // DOM events and observers vary by theme and can be missed.
+  // Our own writes use nativeFetch so they don't re-trigger a sync.
   const cartWriteRe = /\/cart\/(add|change|update|clear)\b/;
-  const nativeFetch = window.fetch.bind(window);
   window.fetch = function (input, init) {
     const url = typeof input === "string" ? input : input?.url || "";
     const p = nativeFetch(input, init);
