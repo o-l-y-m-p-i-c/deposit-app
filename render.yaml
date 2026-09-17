@@ -17,6 +17,6 @@ services:
       - key: SHOPIFY_APP_URL
         sync: false
       - key: SCOPES
-        value: read_products,write_products,write_cart_transforms,read_metaobjects,write_metaobjects,read_orders,read_themes
+        value: read_products,write_products,write_cart_transforms,read_validations,write_validations,read_metaobjects,write_metaobjects,read_orders,read_themes
       - key: WEBHOOK_SECRET
         sync: false

@@ -22,6 +22,7 @@ import {
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
 const VALIDATION_HANDLE = "deposit-validation";
+const VALIDATION_TITLE = "Bottle Deposit";
 
 /**
  * Get or create default settings for a shop.
@@ -176,17 +177,15 @@ export async function getOrCreateValidation(shop: string, existingId?: string | 
     if (match) return match;
   }
 
-  // Reuse any existing Validation for this function
-  const owned = nodes.find(
-    (n: { shopifyFunction?: { handle?: string } }) =>
-      n.shopifyFunction?.handle === VALIDATION_HANDLE,
-  );
+  // Reuse any existing Validation for this app (matched by title —
+  // `shopifyFunction.handle` isn't queryable on all API versions)
+  const owned = nodes.find((n: { title?: string }) => n.title === VALIDATION_TITLE);
   if (owned) return owned;
 
   // Otherwise create a new one
   const result = await adminGraphql(CREATE_VALIDATION, {
     validation: {
-      title: "Bottle Deposit",
+      title: VALIDATION_TITLE,
       functionHandle: VALIDATION_HANDLE,
       enable: true,
       blockOnFailure: false,
