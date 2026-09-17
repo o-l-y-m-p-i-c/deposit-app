@@ -70,6 +70,9 @@
   let pendingUpdate = false;
   // Guard flag to prevent overlapping cart syncs
   let isSyncing = false;
+  // Set when a trigger arrives mid-sync — re-run afterwards so the
+  // final write always uses the freshest cart state
+  let pendingSync = false;
   // Backoff state — failed writes must not retry in a hot loop
   // (a 429 or network flake would otherwise self-amplify into
   // Cloudflare rate limits)
@@ -314,15 +317,11 @@
    */
   function refreshCartUi(cartData) {
     try {
-      if (
-        typeof window.publish === "function" &&
-        window.PUB_SUB_EVENTS?.cartUpdate &&
-        cartData?.sections
-      ) {
-        window.publish(window.PUB_SUB_EVENTS.cartUpdate, {
-          source: "deposit-sync",
-          cartData,
-        });
+      // PUB_SUB_EVENTS is script-scoped in Dawn — not on window — so
+      // fall back to the literal event name "cart-update"
+      const evt = window.PUB_SUB_EVENTS?.cartUpdate || "cart-update";
+      if (typeof window.publish === "function" && cartData?.sections) {
+        window.publish(evt, { source: "deposit-sync", cartData });
       }
     } catch (e) {
       // Not a pubsub theme — fall through to DOM events
@@ -338,7 +337,11 @@
    * turn the sync into a request storm.
    */
   async function syncDepositLine() {
-    if (!DEPOSIT_VARIANT_ID || isSyncing) return;
+    if (!DEPOSIT_VARIANT_ID) return;
+    if (isSyncing) {
+      pendingSync = true;
+      return;
+    }
     if (Date.now() < syncCooldownUntil) return;
     isSyncing = true;
 
@@ -398,6 +401,10 @@
       syncCooldownUntil = Date.now() + delay;
     } finally {
       isSyncing = false;
+      if (pendingSync) {
+        pendingSync = false;
+        syncDepositLine();
+      }
     }
   }
 
@@ -576,12 +583,12 @@
     return NativeXHROpen.apply(this, arguments);
   };
 
-  // Dawn-style pubsub (used by Dawn, Prestige and other themes)
+  // Dawn-style pubsub (used by Dawn, Prestige and other themes).
+  // PUB_SUB_EVENTS is script-scoped — use the literal "cart-update".
   try {
-    if (typeof window.subscribe === "function" && window.PUB_SUB_EVENTS?.cartUpdate) {
-      window.subscribe(window.PUB_SUB_EVENTS.cartUpdate, () =>
-        setTimeout(updatePrices, 250),
-      );
+    if (typeof window.subscribe === "function") {
+      const evt = window.PUB_SUB_EVENTS?.cartUpdate || "cart-update";
+      window.subscribe(evt, () => setTimeout(updatePrices, 250));
     }
   } catch (e) {}
 
