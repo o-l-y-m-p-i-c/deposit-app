@@ -563,6 +563,7 @@
       const depositLines = [];
 
       indexCart(cart);
+      patchCartCount();
 
       for (const item of cart.items || []) {
         if (item.variant_id === DEPOSIT_VARIANT_ID) {
@@ -722,6 +723,30 @@
   }
 
   /**
+   * Rewrite the cart-count bubble to exclude deposit quantities.
+   * Runs synchronously in the observer (before paint) so the number
+   * never visibly flips — same trick as the row locking.
+   */
+  function patchCartCount() {
+    if (!lastCart) return;
+    const count = (lastCart.items || []).reduce(
+      (s, i) => (i.variant_id === DEPOSIT_VARIANT_ID ? s : s + i.quantity),
+      0,
+    );
+    document.querySelectorAll(".cart-count-bubble").forEach((b) => {
+      const num = b.querySelector("span[aria-hidden]");
+      const label = b.querySelector(".visually-hidden");
+      if (num && num.textContent.trim() !== String(count)) {
+        num.textContent = String(count);
+      }
+      if (label) {
+        label.textContent = `${count} item${count === 1 ? "" : "s"}`;
+      }
+      b.style.display = count === 0 ? "none" : "";
+    });
+  }
+
+  /**
    * Find the deposit row in the rendered cart (page + drawer) and lock it.
    * Dawn quantity inputs carry data-quantity-line-key="{variantId}:{hash}".
    * Fallback: match the product link href to the deposit handle.
@@ -814,6 +839,7 @@
     // insertion but before paint, so the class lands before the row is
     // ever drawn (kills the quantity-popover flash on section re-render)
     lockDepositRows();
+    patchCartCount();
 
     for (const mutation of mutations) {
       // Skip mutations that only involve our own elements
