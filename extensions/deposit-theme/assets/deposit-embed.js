@@ -103,6 +103,20 @@
       }
     }
   }
+
+  /** Display title of the product a variant id belongs to. */
+  function titleForVid(vid) {
+    const it = lastCart?.items?.find((i) => i.variant_id === vid);
+    return it?.product_title || it?.title || "";
+  }
+
+  /** Properties for a deposit line linked to a product variant. */
+  function depositProps(vid) {
+    const props = { _deposit_for: String(vid) };
+    const title = titleForVid(vid);
+    if (title) props["Deposit for"] = title;
+    return props;
+  }
   // Backoff state — failed writes must not retry in a hot loop
   // (a 429 or network flake would otherwise self-amplify into
   // Cloudflare rate limits)
@@ -581,11 +595,13 @@
               sections_url: window.location.pathname,
             }),
           );
-        } else if (line.quantity !== expected) {
+        } else if (line.quantity !== expected || !line.properties?.["Deposit for"]) {
+          // Wrong qty or missing visible "Deposit for" property
           writes.push(
             postCart("/cart/change.js", {
               id: line.key,
               quantity: expected,
+              properties: depositProps(forVid),
               sections: CART_SECTIONS,
               sections_url: window.location.pathname,
             }),
@@ -605,7 +621,7 @@
                 {
                   id: DEPOSIT_VARIANT_ID,
                   quantity: qty,
-                  properties: { _deposit_for: String(vid) },
+                  properties: depositProps(vid),
                 },
               ],
               sections: CART_SECTIONS,
@@ -703,41 +719,6 @@
         qtyCell.appendChild(span);
       }
     }
-
-    // Always retry the label — the first pass may run before lastCart
-    // is populated, and the row's locked flag would otherwise block it
-    renderDepositFor(row);
-  }
-
-  /**
-   * Render which product this deposit line belongs to.
-   * Dawn row ids are 1-based cart indexes ("CartItem-3",
-   * "CartDrawer-Item-2") → cart.items[N-1] → _deposit_for → title.
-   */
-  function renderDepositFor(row) {
-    if (row.querySelector(".deposit-for") || !lastCart) return;
-    const m = row.id?.match(/(?:CartItem|CartDrawer-Item|DrawerItem)-(\d+)/)
-      || row.id?.match(/-(\d+)$/);
-    if (!m) return;
-    const line = lastCart.items?.[Number(m[1]) - 1];
-    if (!line || line.variant_id !== DEPOSIT_VARIANT_ID) return;
-    const forVid = Number(line.properties?._deposit_for);
-    if (!forVid) return;
-    const product = lastCart.items.find((i) => i.variant_id === forVid);
-    const title = product?.product_title || product?.title;
-    if (!title) return;
-
-    const cell =
-      row.querySelector(".cart-item__name")?.parentElement ||
-      row.querySelector(".cart-item__details") ||
-      row.cells?.[1];
-    if (!cell) return;
-
-    const div = document.createElement("div");
-    div.className = "deposit-for";
-    div.style.cssText = "font-size: 0.85em; opacity: 0.65; margin-top: 2px;";
-    div.textContent = `Part of: ${title}`;
-    cell.appendChild(div);
   }
 
   /**
@@ -841,7 +822,6 @@
           n.nodeType === 1 &&
           (n.dataset?.depositLine === "true" ||
             n.classList?.contains("deposit-qty-static") ||
-            n.classList?.contains("deposit-for") ||
             n.id === "deposit-lock-styles"),
       );
       if (addedByUs && mutation.addedNodes.length > 0) continue;
