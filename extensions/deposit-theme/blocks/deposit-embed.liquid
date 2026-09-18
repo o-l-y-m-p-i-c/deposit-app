@@ -27,24 +27,28 @@
   /* Loading state while deposit-embed.js hasn't run its first sync
      yet — lifted when the script sets html.deposit-ready */
   @keyframes deposit-spin { to { transform: rotate(360deg); } }
-  html:not(.deposit-ready) .cart-count-bubble { visibility: hidden !important; }
-  html:not(.deposit-ready) #cart-icon-bubble::after {
-    content: ""; position: absolute; top: 8px; right: 0;
-    width: 10px; height: 10px; border-radius: 50%;
-    border: 2px solid rgba(0,0,0,.15); border-top-color: rgba(0,0,0,.55);
+
+  /* Header cart bubble: number hidden, spinner inside the bubble */
+  html:not(.deposit-ready) .cart-count-bubble > span { visibility: hidden !important; }
+  html:not(.deposit-ready) .cart-count-bubble::after {
+    content: ""; position: absolute; top: 50%; left: 50%;
+    width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.4); border-top-color: currentColor;
     animation: deposit-spin .8s linear infinite;
   }
-  html:not(.deposit-ready) cart-items,
+
+  /* Cart page: overlay only the items table (.cart__contents) */
+  html:not(.deposit-ready) .cart__contents,
   html:not(.deposit-ready) cart-drawer-items { position: relative; }
-  html:not(.deposit-ready) cart-items::after,
+  html:not(.deposit-ready) .cart__contents::after,
   html:not(.deposit-ready) cart-drawer-items::after {
     content: ""; position: absolute; inset: 0; z-index: 10;
     background: rgba(255,255,255,.55); pointer-events: all;
   }
-  html:not(.deposit-ready) cart-items::before,
+  html:not(.deposit-ready) .cart__contents::before,
   html:not(.deposit-ready) cart-drawer-items::before {
     content: ""; position: absolute; z-index: 11;
-    top: 40px; left: 50%; margin-left: -13px;
+    top: 50%; left: 50%; margin: -13px 0 0 -13px;
     width: 26px; height: 26px; border-radius: 50%;
     border: 3px solid rgba(0,0,0,.12); border-top-color: rgba(0,0,0,.55);
     animation: deposit-spin .8s linear infinite;
