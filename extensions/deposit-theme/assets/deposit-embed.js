@@ -83,6 +83,7 @@
   let lastCart = null;
   const variantMeta = new Map(); // vid -> {key, handle, qty} for product lines
   const variantEligible = new Map(); // vid -> bool
+  const variantStock = new Map(); // vid -> {quantity, policy}
   const depositKeyFor = new Map(); // product vid -> deposit line key
 
   function indexCart(cart) {
@@ -164,6 +165,13 @@
     const product = await res.json();
     const tags = product.tags || [];
     tagCache.set(handle, tags);
+    // Seed stock too — same fetch, needed for over-stock bundling checks
+    (product.variants || []).forEach((v) =>
+      variantStock.set(Number(v.id), {
+        quantity: v.inventory_quantity,
+        policy: v.inventory_policy,
+      }),
+    );
     return tags;
   }
 
@@ -417,10 +425,26 @@
       const handle = m[1];
       tagCache.set(handle, product.tags || []);
       const eligible = await isEligibleItem({ handle });
-      (product.variants || []).forEach((v) =>
-        variantEligible.set(Number(v.id), eligible),
-      );
+      (product.variants || []).forEach((v) => {
+        variantEligible.set(Number(v.id), eligible);
+        variantStock.set(Number(v.id), {
+          quantity: v.inventory_quantity,
+          policy: v.inventory_policy,
+        });
+      });
     } catch (e) {}
+  }
+
+  /**
+   * Can the variant be sold at the requested quantity? Used to decide
+   * whether a cart write can be safely bundled — over-stock requests
+   * must pass through natively so Shopify returns its inventory error.
+   */
+  function canSell(vid, qty) {
+    const s = variantStock.get(vid);
+    if (!s || s.quantity == null) return true; // untracked/unknown
+    if (s.policy === "continue") return true;
+    return qty <= s.quantity;
   }
 
   /**
@@ -438,6 +462,8 @@
         const vid = Number(a.id);
         const qty = Number(a.quantity || 1);
         if (!variantEligible.get(vid) || vid === DEPOSIT_VARIANT_ID) continue;
+        // Water add will fail server-side on inventory — skip deposit
+        if (!canSell(vid, expectedQty(vid) + qty)) continue;
         const newExpected = expectedQty(vid) + qty;
         const depKey = depositKeyFor.get(vid);
         const p = depKey
@@ -497,6 +523,9 @@
         };
       }
       if (!variantEligible.get(vid)) return null;
+      // Over-stock → pass through to native /cart/change so Shopify
+      // returns its inventory error (update.js would cap silently)
+      if (!canSell(vid, qty)) return null;
       const depKey = depositKeyFor.get(vid);
       const newExpected = expectedQty(vid, key, qty);
       if (!depKey) return null; // no deposit line yet → sync adds it
@@ -512,6 +541,14 @@
 
     if (/\/cart\/update\b/.test(url)) {
       if (!data.updates || typeof data.updates !== "object") return null;
+      // If any updated line exceeds stock, pass the whole request
+      // through so Shopify returns its native inventory error
+      for (const [key, qtyStr] of Object.entries(data.updates)) {
+        const item = lastCart.items.find((i) => i.key === key);
+        if (item && item.variant_id !== DEPOSIT_VARIANT_ID && !canSell(item.variant_id, Number(qtyStr))) {
+          return null;
+        }
+      }
       const updates = { ...data.updates };
       for (const [key, qtyStr] of Object.entries(data.updates)) {
         const item = lastCart.items.find((i) => i.key === key);
