@@ -4,13 +4,14 @@
  * 1. Appends "+ 0.10 EUR per bottle" text on eligible product prices
  *    (product pages, product cards).
  *
- * 2. Manages the deposit as a real cart line ("line" mode):
- *    - Auto-adds the deposit product when eligible items are in the cart
- *    - Keeps its quantity equal to the total eligible quantity
- *    - Removes it when no eligible items remain
- *    - Hides quantity/remove controls on the deposit row
- *    The deposit-validation Function enforces the same rule at checkout,
- *    so tampering with the line can't bypass the deposit.
+ * 2. Manages deposit as real cart lines ("line" mode):
+ *    - Auto-adds a deposit line per eligible variant, tagged with a
+ *      _deposit_for line-item property pointing at that variant
+ *    - Keeps each deposit line's quantity equal to its product's quantity
+ *    - Removes deposit lines whose product left the cart
+ *    - Hides quantity/remove controls on deposit rows
+ *    (Different properties keep the lines separate — Shopify does not
+ *    merge same-variant items with different properties.)
  *
  * Eligibility mirrors the server: product tags via /products/{handle}.js,
  * collection membership via /collections/{handle}/products.json.
@@ -226,6 +227,11 @@
       return;
     }
 
+    // Seed the tag cache so the first cart sync skips the
+    // /products/{handle}.js fetch for this product
+    const handleMatch = window.location.pathname.match(/\/products\/([^/?#]+)/);
+    if (handleMatch) tagCache.set(handleMatch[1], productTags);
+
     const { included, excluded } = isEligibleTags(productTags);
     if (!included || excluded) return;
 
@@ -331,12 +337,14 @@
   }
 
   /**
-   * Ensure the deposit line exists and its quantity equals the total
-   * quantity of eligible items. Idempotent — only writes on mismatch.
-   * Backs off on failures so a rate-limited or flaky network can't
-   * turn the sync into a request storm.
+   * Ensure deposit lines exist per eligible variant and each quantity
+   * matches its product. Deposit lines carry _deposit_for = variant id,
+   * so they're attributed to the right product in the order.
+   * Idempotent — only writes on mismatch. Backs off on failures.
+   * `cartOverride` lets callers pass a fresh cart (from an intercepted
+   * response) and skip the /cart.js roundtrip.
    */
-  async function syncDepositLine() {
+  async function syncDepositLine(cartOverride) {
     if (!DEPOSIT_VARIANT_ID) return;
     if (isSyncing) {
       pendingSync = true;
@@ -346,52 +354,92 @@
     isSyncing = true;
 
     try {
-      const res = await nativeFetch("/cart.js");
-      if (!res.ok) throw new Error(`cart read ${res.status}`);
-      const cart = await res.json();
+      let cart = cartOverride;
+      if (!cart) {
+        const res = await nativeFetch("/cart.js");
+        if (!res.ok) throw new Error(`cart read ${res.status}`);
+        cart = await res.json();
+      }
 
-      let expected = 0;
-      let depositLine = null;
+      // variantId -> expected deposit qty for non-deposit lines
+      const expectedByVariant = new Map();
+      const depositLines = [];
 
       for (const item of cart.items || []) {
         if (item.variant_id === DEPOSIT_VARIANT_ID) {
-          depositLine = item;
+          depositLines.push(item);
           depositHandle = item.handle || depositHandle;
           continue;
         }
         // Throws on transient fetch failures → abort without writing
         if (await isEligibleItem(item)) {
-          expected += item.quantity;
+          expectedByVariant.set(
+            item.variant_id,
+            (expectedByVariant.get(item.variant_id) || 0) + item.quantity,
+          );
         }
       }
 
-      let cartData = null;
-      if (expected > 0 && !depositLine) {
-        cartData = await postCart("/cart/add.js", {
-          items: [{ id: DEPOSIT_VARIANT_ID, quantity: expected }],
-          sections: CART_SECTIONS,
-          sections_url: window.location.pathname,
-        });
-      } else if (depositLine && depositLine.quantity !== expected) {
-        cartData = await postCart("/cart/change.js", {
-          id: depositLine.key,
-          quantity: expected,
-          sections: CART_SECTIONS,
-          sections_url: window.location.pathname,
-        });
-      } else if (expected === 0 && depositLine) {
-        cartData = await postCart("/cart/change.js", {
-          id: depositLine.key,
-          quantity: 0,
-          sections: CART_SECTIONS,
-          sections_url: window.location.pathname,
-        });
+      const writes = [];
+
+      // Fix or remove existing deposit lines
+      for (const line of depositLines) {
+        const forVid = Number(line.properties?._deposit_for) || null;
+        const expected = forVid ? expectedByVariant.get(forVid) || 0 : 0;
+        if (expected === 0) {
+          // Orphan: product left the cart, or a legacy line without
+          // the _deposit_for property → remove and re-add properly
+          writes.push(
+            postCart("/cart/change.js", {
+              id: line.key,
+              quantity: 0,
+              sections: CART_SECTIONS,
+              sections_url: window.location.pathname,
+            }),
+          );
+        } else if (line.quantity !== expected) {
+          writes.push(
+            postCart("/cart/change.js", {
+              id: line.key,
+              quantity: expected,
+              sections: CART_SECTIONS,
+              sections_url: window.location.pathname,
+            }),
+          );
+        }
       }
 
-      consecutiveFailures = 0;
-      if (cartData) {
-        refreshCartUi(cartData);
+      // Add missing deposit lines (one per eligible variant)
+      for (const [vid, qty] of expectedByVariant) {
+        const exists = depositLines.some(
+          (l) => Number(l.properties?._deposit_for) === vid,
+        );
+        if (!exists) {
+          writes.push(
+            postCart("/cart/add.js", {
+              items: [
+                {
+                  id: DEPOSIT_VARIANT_ID,
+                  quantity: qty,
+                  properties: { _deposit_for: String(vid) },
+                },
+              ],
+              sections: CART_SECTIONS,
+              sections_url: window.location.pathname,
+            }),
+          );
+        }
       }
+
+      const results = await Promise.allSettled(writes);
+      const rejected = results.find((r) => r.status === "rejected");
+      if (rejected) throw rejected.reason;
+
+      consecutiveFailures = 0;
+      const last = [...results].reverse().find(
+        (r) => r.status === "fulfilled" && r.value,
+      );
+      if (last) refreshCartUi(last.value);
       lockDepositRows();
     } catch (e) {
       // Any failure (rate limit, network, eligibility fetch) → back off
@@ -486,8 +534,10 @@
   /**
    * Main update function — runs on all page types.
    * Guarded against infinite loops from MutationObserver.
+   * `cartOverride` — fresh cart state from an intercepted response,
+   * skips the /cart.js roundtrip for the sync.
    */
-  async function updatePrices() {
+  async function updatePrices(cartOverride) {
     if (isUpdating) return;
     isUpdating = true;
 
@@ -500,8 +550,8 @@
         updateProductPage();
       }
 
-      // Sync the deposit line + re-lock controls (async)
-      await syncDepositLine();
+      // Sync deposit lines + re-lock controls (async)
+      await syncDepositLine(cartOverride);
 
       // Product cards on collection/search pages
       if (pageType !== "product") {
@@ -567,7 +617,12 @@
     const p = nativeFetch(input, init);
     if (cartWriteRe.test(url)) {
       return p.then((res) => {
-        setTimeout(updatePrices, 250);
+        // Cart responses already contain the fresh cart — use it
+        // directly instead of an extra /cart.js roundtrip
+        res.clone().json().then((data) => {
+          const cart = data && Array.isArray(data.items) ? data : null;
+          setTimeout(() => updatePrices(cart), 50);
+        }).catch(() => setTimeout(updatePrices, 50));
         return res;
       });
     }
@@ -578,7 +633,14 @@
   const NativeXHROpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url) {
     if (cartWriteRe.test(String(url))) {
-      this.addEventListener("loadend", () => setTimeout(updatePrices, 250));
+      this.addEventListener("loadend", () => {
+        let cart = null;
+        try {
+          const data = JSON.parse(this.responseText);
+          if (data && Array.isArray(data.items)) cart = data;
+        } catch (e) {}
+        setTimeout(() => updatePrices(cart), 50);
+      });
     }
     return NativeXHROpen.apply(this, arguments);
   };
