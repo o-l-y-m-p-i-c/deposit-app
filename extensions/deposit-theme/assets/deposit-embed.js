@@ -623,6 +623,9 @@
       const last = [...results].reverse().find(
         (r) => r.status === "fulfilled" && r.value,
       );
+      // Re-index from the post-write cart so row positions and
+      // deposit lines match the state the theme is about to render
+      if (last?.value?.items) indexCart(last.value);
       if (last) refreshCartUi(last.value);
       lockDepositRows();
     } catch (e) {
