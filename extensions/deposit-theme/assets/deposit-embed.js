@@ -651,10 +651,14 @@
     // the row — no flash even when the theme re-renders the section.
     style.textContent = `
       quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"],
+      quantity-popover-container:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
+      quantity-popover:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
+      .quantity-popover-wrapper:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
       tr:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
       div:has(> quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
       .deposit-line-locked quantity-input,
       .deposit-line-locked quantity-popover,
+      .deposit-line-locked quantity-popover-container,
       .deposit-line-locked cart-remove-button,
       .deposit-line-locked .cart-item__quantity-wrapper,
       .deposit-line-locked .cart-item__remove,
@@ -676,8 +680,13 @@
       "input[name='updates[]'], input[data-quantity-line-key]",
     );
     const qty = qtyInput?.value || "";
+
+    // The quantity control itself is CSS-hidden — put the static qty
+    // text into the cell that wraps the hidden container
     const qtyCell =
-      row.querySelector(".cart-item__quantity") || qtyInput?.closest("td");
+      row.querySelector("quantity-popover-container")?.parentElement ||
+      row.querySelector(".cart-item__quantity") ||
+      qtyInput?.closest("td");
     if (qtyCell && !qtyCell.querySelector(".deposit-qty-static")) {
       const span = document.createElement("span");
       span.className = "deposit-qty-static";
@@ -685,6 +694,39 @@
       span.textContent = qty;
       qtyCell.appendChild(span);
     }
+
+    renderDepositFor(row);
+  }
+
+  /**
+   * Render which product this deposit line belongs to.
+   * Dawn row ids are 1-based cart indexes ("CartItem-3",
+   * "CartDrawer-Item-2") → cart.items[N-1] → _deposit_for → title.
+   */
+  function renderDepositFor(row) {
+    if (row.querySelector(".deposit-for") || !lastCart) return;
+    const m = row.id?.match(/(?:CartItem|CartDrawer-Item|DrawerItem)-(\d+)/)
+      || row.id?.match(/-(\d+)$/);
+    if (!m) return;
+    const line = lastCart.items?.[Number(m[1]) - 1];
+    if (!line || line.variant_id !== DEPOSIT_VARIANT_ID) return;
+    const forVid = Number(line.properties?._deposit_for);
+    if (!forVid) return;
+    const product = lastCart.items.find((i) => i.variant_id === forVid);
+    const title = product?.product_title || product?.title;
+    if (!title) return;
+
+    const cell =
+      row.querySelector(".cart-item__name")?.parentElement ||
+      row.querySelector(".cart-item__details") ||
+      row.cells?.[1];
+    if (!cell) return;
+
+    const div = document.createElement("div");
+    div.className = "deposit-for";
+    div.style.cssText = "font-size: 0.85em; opacity: 0.65; margin-top: 2px;";
+    div.textContent = `Part of: ${title}`;
+    cell.appendChild(div);
   }
 
   /**
