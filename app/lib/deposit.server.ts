@@ -355,8 +355,13 @@ export async function fullSync(shop: string, appInstallationId: string) {
       await updateDepositPrice(shop, productId, variantId, settings.amountMinor);
       await log("update_deposit_price", "success", `Price updated to ${settings.amountMinor} cents`);
     } else {
-      ({ productId, variantId } = await createDepositProduct(shop, settings.amountMinor));
+      const created = await createDepositProduct(shop, settings.amountMinor);
+      productId = created.productId;
+      variantId = created.variantId;
       await log("create_deposit_product", "success", `Product ready: ${productId}`);
+    }
+    if (!productId || !variantId) {
+      throw new Error("Deposit product is missing a product or variant ID");
     }
     // Line mode adds the deposit via the Ajax Cart API, which requires
     // the product to be published to the Online Store channel.
