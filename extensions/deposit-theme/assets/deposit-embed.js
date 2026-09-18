@@ -168,6 +168,7 @@
     // Seed stock too — same fetch, needed for over-stock bundling checks
     (product.variants || []).forEach((v) =>
       variantStock.set(Number(v.id), {
+        tracked: v.inventory_management === "shopify",
         quantity: v.inventory_quantity,
         policy: v.inventory_policy,
       }),
@@ -428,6 +429,7 @@
       (product.variants || []).forEach((v) => {
         variantEligible.set(Number(v.id), eligible);
         variantStock.set(Number(v.id), {
+          tracked: v.inventory_management === "shopify",
           quantity: v.inventory_quantity,
           policy: v.inventory_policy,
         });
@@ -444,8 +446,9 @@
   function canSell(vid, qty) {
     const s = variantStock.get(vid);
     if (!s) return false; // unknown → don't bundle, preserve native errors
-    if (s.quantity == null) return true; // untracked → unlimited
     if (s.policy === "continue") return true;
+    if (!s.tracked) return true; // untracked → unlimited
+    if (s.quantity == null) return false; // tracked, qty unknown → don't bundle
     return qty <= s.quantity;
   }
 
@@ -756,10 +759,13 @@
       const qty = qtyInput?.value || "";
 
       // The quantity control itself is CSS-hidden — put the static qty
-      // text into the cell that wraps the hidden container
+      // text into the cell that wraps the hidden popover (the popover's
+      // parent stays visible in both cart-page <td> and drawer markup;
+      // note quantity-popover-container is a class, not an element)
       const qtyCell =
-        row.querySelector("quantity-popover-container")?.parentElement ||
+        row.querySelector("quantity-popover")?.parentElement ||
         row.querySelector(".cart-item__quantity") ||
+        row.querySelector(".quantity-popover-container")?.parentElement ||
         qtyInput?.closest("td");
       if (qtyCell && !qtyCell.querySelector(".deposit-qty-static")) {
         const span = document.createElement("span");
@@ -818,7 +824,9 @@
       .forEach((el) => {
         const key = el.getAttribute("data-quantity-line-key") || "";
         if (!key.startsWith(prefix)) return;
-        const row = el.closest("tr.cart-item, .cart-item, tr, li");
+        const row = el.closest(
+          "tr.cart-item, .cart-item, .cart-drawer-item, tr, li",
+        );
         if (row) rows.add(row);
       });
 
@@ -826,7 +834,9 @@
       document
         .querySelectorAll(`a[href*="/products/${depositHandle}"]`)
         .forEach((a) => {
-          const row = a.closest("tr.cart-item, .cart-item");
+          const row = a.closest(
+            "tr.cart-item, .cart-item, .cart-drawer-item",
+          );
           if (row) rows.add(row);
         });
     }
