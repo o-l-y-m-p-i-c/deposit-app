@@ -649,16 +649,20 @@
     style.id = "deposit-lock-styles";
     // Variant-keyed selectors hide the controls before JS ever runs on
     // the row — no flash even when the theme re-renders the section.
+    // Sibling selectors (~) cover browsers without :has() support.
     style.textContent = `
       quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"],
-      quantity-popover-container:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
+      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"] ~ cart-remove-button,
+      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"] ~ .quantity-popover__info-button,
+      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"] ~ .cart-items__info,
+      .quantity-popover-container:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
       quantity-popover:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
       .quantity-popover-wrapper:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
       tr:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
-      div:has(> quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
       .deposit-line-locked quantity-input,
       .deposit-line-locked quantity-popover,
       .deposit-line-locked quantity-popover-container,
+      .deposit-line-locked .quantity-popover-container,
       .deposit-line-locked cart-remove-button,
       .deposit-line-locked .cart-item__quantity-wrapper,
       .deposit-line-locked .cart-item__remove,
@@ -818,6 +822,11 @@
   // Filter out mutations from our own injected elements to prevent loops
   let observerTimeout;
   const observer = new MutationObserver((mutations) => {
+    // Lock deposit rows immediately — observer callbacks run after DOM
+    // insertion but before paint, so the class lands before the row is
+    // ever drawn (kills the quantity-popover flash on section re-render)
+    lockDepositRows();
+
     for (const mutation of mutations) {
       // Skip mutations that only involve our own elements
       const addedByUs = Array.from(mutation.addedNodes).every(
@@ -825,6 +834,7 @@
           n.nodeType === 1 &&
           (n.dataset?.depositLine === "true" ||
             n.classList?.contains("deposit-qty-static") ||
+            n.classList?.contains("deposit-for") ||
             n.id === "deposit-lock-styles"),
       );
       if (addedByUs && mutation.addedNodes.length > 0) continue;
