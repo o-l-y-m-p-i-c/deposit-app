@@ -49,7 +49,12 @@
     config.currencyCode ||
     "EUR";
 
-  const depositText = `${config.depositAmount} ${shopCurrency} per bottle`;
+  // Locale-aware currency formatting — renders "€0.10" not "0.10 EUR"
+  const currencyFormatter = new Intl.NumberFormat(
+    document.documentElement.lang || undefined,
+    { style: "currency", currency: shopCurrency },
+  );
+  const depositText = `${currencyFormatter.format(Number(config.depositAmount) || 0)} per bottle`;
 
   const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
 
