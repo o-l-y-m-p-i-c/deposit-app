@@ -74,6 +74,35 @@
   // Set when a trigger arrives mid-sync — re-run afterwards so the
   // final write always uses the freshest cart state
   let pendingSync = false;
+
+  // ---- Cart model (rebuilt on every cart read) ----
+  // Fresh cart state and derived lookups let the fetch interceptor
+  // rewrite the theme's own cart mutations atomically, so the deposit
+  // updates in the SAME request as the customer's change — no lag,
+  // no double render.
+  let lastCart = null;
+  const variantMeta = new Map(); // vid -> {key, handle, qty} for product lines
+  const variantEligible = new Map(); // vid -> bool
+  const depositKeyFor = new Map(); // product vid -> deposit line key
+
+  function indexCart(cart) {
+    lastCart = cart;
+    variantMeta.clear();
+    depositKeyFor.clear();
+    for (const item of cart.items || []) {
+      if (item.variant_id === DEPOSIT_VARIANT_ID) {
+        const forVid = Number(item.properties?._deposit_for);
+        if (forVid) depositKeyFor.set(forVid, item.key);
+        depositHandle = item.handle || depositHandle;
+      } else {
+        variantMeta.set(item.variant_id, {
+          key: item.key,
+          handle: item.handle,
+          quantity: item.quantity,
+        });
+      }
+    }
+  }
   // Backoff state — failed writes must not retry in a hot loop
   // (a 429 or network flake would otherwise self-amplify into
   // Cloudflare rate limits)
@@ -337,6 +366,160 @@
   }
 
   /**
+   * Resolve and cache a variant's eligibility (per product — all
+   * variants of a product share eligibility).
+   */
+  async function ensureEligible(vid, handle) {
+    if (variantEligible.has(vid)) return variantEligible.get(vid);
+    const eligible = await isEligibleItem({ handle, variant_id: vid });
+    variantEligible.set(vid, eligible);
+    return eligible;
+  }
+
+  /**
+   * Expected deposit qty for a variant, optionally substituting one
+   * line's quantity (used when intercepting a pending change).
+   */
+  function expectedQty(vid, changedKey, newQty) {
+    let sum = 0;
+    for (const i of lastCart?.items || []) {
+      if (i.variant_id !== vid) continue;
+      sum += i.key === changedKey ? newQty : i.quantity;
+    }
+    return sum;
+  }
+
+  /**
+   * Seed eligibility for the current product page's variants so an
+   * add-to-cart can be bundled immediately without extra fetches.
+   */
+  async function seedProductEligibility() {
+    const m = window.location.pathname.match(/\/products\/([^/?#]+)/);
+    if (!m) return;
+    try {
+      const res = await nativeFetch(`/products/${m[1]}.js`);
+      if (!res.ok) return;
+      const product = await res.json();
+      const handle = m[1];
+      tagCache.set(handle, product.tags || []);
+      const eligible = await isEligibleItem({ handle });
+      (product.variants || []).forEach((v) =>
+        variantEligible.set(Number(v.id), eligible),
+      );
+    } catch (e) {}
+  }
+
+  /**
+   * When a cart/add request is intercepted, fire the matching deposit
+   * write in parallel so both land together — the deposit appears in
+   * the same render instead of a beat later.
+   */
+  function fireDepositForAdd(init) {
+    try {
+      const data = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+      const adds =
+        data?.items ||
+        (data?.id ? [{ id: data.id, quantity: data.quantity }] : []);
+      for (const a of adds) {
+        const vid = Number(a.id);
+        const qty = Number(a.quantity || 1);
+        if (!variantEligible.get(vid) || vid === DEPOSIT_VARIANT_ID) continue;
+        const newExpected = expectedQty(vid) + qty;
+        const depKey = depositKeyFor.get(vid);
+        const p = depKey
+          ? postCart("/cart/change.js", {
+              id: depKey,
+              quantity: newExpected,
+              sections: CART_SECTIONS,
+              sections_url: window.location.pathname,
+            })
+          : postCart("/cart/add.js", {
+              items: [
+                {
+                  id: DEPOSIT_VARIANT_ID,
+                  quantity: newExpected,
+                  properties: { _deposit_for: String(vid) },
+                },
+              ],
+              sections: CART_SECTIONS,
+              sections_url: window.location.pathname,
+            });
+        p.catch(() => {}); // sync retries
+      }
+    } catch (e) {}
+  }
+
+  /**
+   * Rewrite an intercepted /cart/change|update so the deposit
+   * adjustment lands in the SAME mutation — atomic, single render.
+   * Returns {url, body} or null when bundling isn't possible.
+   */
+  function buildAtomicWrite(url, init) {
+    if (!lastCart || !init || typeof init.body !== "string") return null;
+    let data;
+    try {
+      data = JSON.parse(init.body);
+    } catch (e) {
+      return null;
+    }
+    const sections = data.sections;
+    const sectionsUrl = data.sections_url;
+
+    if (/\/cart\/change\b/.test(url)) {
+      const key =
+        data.id || lastCart.items?.[Number(data.line) - 1]?.key;
+      const qty = Number(data.quantity);
+      if (!key || Number.isNaN(qty)) return null;
+      const item = lastCart.items.find((i) => i.key === key);
+      if (!item) return null;
+      const vid = item.variant_id;
+
+      if (vid === DEPOSIT_VARIANT_ID) {
+        // Pin deposit edits back to the expected quantity
+        const forVid = Number(item.properties?._deposit_for);
+        return {
+          url: "/cart/change.js",
+          body: JSON.stringify({ ...data, quantity: expectedQty(forVid) }),
+        };
+      }
+      if (!variantEligible.get(vid)) return null;
+      const depKey = depositKeyFor.get(vid);
+      const newExpected = expectedQty(vid, key, qty);
+      if (!depKey) return null; // no deposit line yet → sync adds it
+      return {
+        url: "/cart/update.js",
+        body: JSON.stringify({
+          updates: { [key]: qty, [depKey]: newExpected },
+          sections,
+          sections_url: sectionsUrl,
+        }),
+      };
+    }
+
+    if (/\/cart\/update\b/.test(url)) {
+      if (!data.updates || typeof data.updates !== "object") return null;
+      const updates = { ...data.updates };
+      for (const [key, qtyStr] of Object.entries(data.updates)) {
+        const item = lastCart.items.find((i) => i.key === key);
+        if (!item) continue;
+        const vid = item.variant_id;
+        if (vid === DEPOSIT_VARIANT_ID) {
+          const forVid = Number(item.properties?._deposit_for);
+          updates[key] = expectedQty(forVid);
+          continue;
+        }
+        if (!variantEligible.get(vid)) continue;
+        const depKey = depositKeyFor.get(vid);
+        if (!depKey) continue;
+        updates[depKey] = expectedQty(vid, key, Number(qtyStr));
+      }
+      return { url, body: JSON.stringify({ ...data, updates }) };
+    }
+
+    return null;
+  }
+
+  /**
    * Ensure deposit lines exist per eligible variant and each quantity
    * matches its product. Deposit lines carry _deposit_for = variant id,
    * so they're attributed to the right product in the order.
@@ -365,14 +548,15 @@
       const expectedByVariant = new Map();
       const depositLines = [];
 
+      indexCart(cart);
+
       for (const item of cart.items || []) {
         if (item.variant_id === DEPOSIT_VARIANT_ID) {
           depositLines.push(item);
-          depositHandle = item.handle || depositHandle;
           continue;
         }
         // Throws on transient fetch failures → abort without writing
-        if (await isEligibleItem(item)) {
+        if (await ensureEligible(item.variant_id, item.handle)) {
           expectedByVariant.set(
             item.variant_id,
             (expectedByVariant.get(item.variant_id) || 0) + item.quantity,
@@ -463,7 +647,12 @@
     if (document.getElementById("deposit-lock-styles")) return;
     const style = document.createElement("style");
     style.id = "deposit-lock-styles";
+    // Variant-keyed selectors hide the controls before JS ever runs on
+    // the row — no flash even when the theme re-renders the section.
     style.textContent = `
+      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"],
+      tr:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
+      div:has(> quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
       .deposit-line-locked quantity-input,
       .deposit-line-locked quantity-popover,
       .deposit-line-locked cart-remove-button,
@@ -568,11 +757,16 @@
     }
   }
 
-  // Run on DOM ready
+  // Run on DOM ready. seedProductEligibility warms the variant->eligible
+  // cache so the first add-to-cart can be bundled immediately.
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", updatePrices);
+    document.addEventListener("DOMContentLoaded", () => {
+      updatePrices();
+      seedProductEligibility();
+    });
   } else {
     updatePrices();
+    seedProductEligibility();
   }
 
   // Retry once after 1s in case <cart-items> renders async after DOMContentLoaded
@@ -614,19 +808,35 @@
   const cartWriteRe = /\/cart\/(add|change|update|clear)\b/;
   window.fetch = function (input, init) {
     const url = typeof input === "string" ? input : input?.url || "";
-    const p = nativeFetch(input, init);
-    if (cartWriteRe.test(url)) {
-      return p.then((res) => {
-        // Cart responses already contain the fresh cart — use it
-        // directly instead of an extra /cart.js roundtrip
-        res.clone().json().then((data) => {
-          const cart = data && Array.isArray(data.items) ? data : null;
-          setTimeout(() => updatePrices(cart), 50);
-        }).catch(() => setTimeout(updatePrices, 50));
-        return res;
-      });
+    if (!cartWriteRe.test(url)) {
+      return nativeFetch(input, init);
     }
-    return p;
+
+    // Atomically bundle the deposit adjustment into the theme's own
+    // change/update request when possible; for adds, fire the deposit
+    // write in parallel. Either way the cart lands consistent — one
+    // render, no lag.
+    let target = input;
+    let targetInit = init;
+    try {
+      const rw = buildAtomicWrite(url, init);
+      if (rw) {
+        target = rw.url;
+        targetInit = { ...init, body: rw.body };
+      } else if (/\/cart\/add\b/.test(url)) {
+        fireDepositForAdd(init);
+      }
+    } catch (e) {}
+
+    return nativeFetch(target, targetInit).then((res) => {
+      // Cart responses already contain the fresh cart — use it
+      // directly instead of an extra /cart.js roundtrip
+      res.clone().json().then((data) => {
+        const cart = data && Array.isArray(data.items) ? data : null;
+        setTimeout(() => updatePrices(cart), 50);
+      }).catch(() => setTimeout(updatePrices, 50));
+      return res;
+    });
   };
 
   // Same for XMLHttpRequest — some themes (and jQuery.ajax) use XHR
