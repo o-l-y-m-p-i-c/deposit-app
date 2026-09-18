@@ -437,12 +437,14 @@
 
   /**
    * Can the variant be sold at the requested quantity? Used to decide
-   * whether a cart write can be safely bundled — over-stock requests
-   * must pass through natively so Shopify returns its inventory error.
+   * whether a cart write can be safely bundled — over-stock or unknown
+   * stock requests must pass through natively so Shopify returns its
+   * inventory error.
    */
   function canSell(vid, qty) {
     const s = variantStock.get(vid);
-    if (!s || s.quantity == null) return true; // untracked/unknown
+    if (!s) return false; // unknown → don't bundle, preserve native errors
+    if (s.quantity == null) return true; // untracked → unlimited
     if (s.policy === "continue") return true;
     return qty <= s.quantity;
   }
@@ -536,6 +538,9 @@
           sections,
           sections_url: sectionsUrl,
         }),
+        // User-requested qty per line — used to detect silent server
+        // caps in the response and synthesize the error
+        check: { [key]: qty },
       };
     }
 
@@ -564,7 +569,14 @@
         if (!depKey) continue;
         updates[depKey] = expectedQty(vid, key, Number(qtyStr));
       }
-      return { url, body: JSON.stringify({ ...data, updates }) };
+      const check = {};
+      for (const [key, qtyStr] of Object.entries(data.updates)) {
+        const item = lastCart.items.find((i) => i.key === key);
+        if (item && item.variant_id !== DEPOSIT_VARIANT_ID) {
+          check[key] = Number(qtyStr);
+        }
+      }
+      return { url, body: JSON.stringify({ ...data, updates }), check };
     }
 
     return null;
@@ -937,23 +949,50 @@
     // render, no lag.
     let target = input;
     let targetInit = init;
+    let check = null;
     try {
       const rw = buildAtomicWrite(url, init);
       if (rw) {
         target = rw.url;
         targetInit = { ...init, body: rw.body };
+        check = rw.check || null;
       } else if (/\/cart\/add\b/.test(url)) {
         fireDepositForAdd(init);
       }
     } catch (e) {}
 
-    return nativeFetch(target, targetInit).then((res) => {
-      // Cart responses already contain the fresh cart — use it
-      // directly instead of an extra /cart.js roundtrip
-      res.clone().json().then((data) => {
-        const cart = data && Array.isArray(data.items) ? data : null;
-        setTimeout(() => updatePrices(cart), 50);
-      }).catch(() => setTimeout(updatePrices, 50));
+    return nativeFetch(target, targetInit).then(async (res) => {
+      let cart = null;
+      try {
+        cart = await res.clone().json();
+      } catch (e) {}
+
+      // Verify the server actually applied the requested qty — update.js
+      // caps over-stock silently, so synthesize the error Dawn shows for
+      // native /cart/change requests (uses its own quantityError string)
+      if (check && cart && Array.isArray(cart.items)) {
+        const cappedKey = Object.keys(check).find((k) => {
+          const it = cart.items.find((i) => i.key === k);
+          return it && it.quantity < check[k];
+        });
+        if (cappedKey) {
+          const actual = cart.items.find((i) => i.key === cappedKey).quantity;
+          const template =
+            window.cartStrings?.quantityError ||
+            "You can only add [quantity] of this item to your cart.";
+          const msg = template.replace("[quantity]", String(actual));
+          setTimeout(() => updatePrices(cart), 50);
+          return new Response(JSON.stringify({ ...cart, errors: msg }), {
+            status: res.status,
+            headers: res.headers,
+          });
+        }
+      }
+
+      setTimeout(
+        () => updatePrices(cart && Array.isArray(cart.items) ? cart : null),
+        50,
+      );
       return res;
     });
   };
