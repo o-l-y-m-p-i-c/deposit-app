@@ -736,13 +736,19 @@
     document.querySelectorAll(".cart-count-bubble").forEach((b) => {
       const num = b.querySelector("span[aria-hidden]");
       const label = b.querySelector(".visually-hidden");
+      // Only write when different — every write is a DOM mutation
+      // that re-triggers the observer (infinite loop otherwise)
       if (num && num.textContent.trim() !== String(count)) {
         num.textContent = String(count);
       }
-      if (label) {
-        label.textContent = `${count} item${count === 1 ? "" : "s"}`;
+      const labelText = `${count} item${count === 1 ? "" : "s"}`;
+      if (label && label.textContent !== labelText) {
+        label.textContent = labelText;
       }
-      b.style.display = count === 0 ? "none" : "";
+      const wantDisplay = count === 0 ? "none" : "";
+      if (b.style.display !== wantDisplay) {
+        b.style.display = wantDisplay;
+      }
     });
   }
 
@@ -842,6 +848,17 @@
     patchCartCount();
 
     for (const mutation of mutations) {
+      // Skip mutations inside elements we manage (count bubble, qty
+      // text) — our own writes must not schedule another pass
+      const t = mutation.target;
+      if (
+        t.nodeType === 1 &&
+        (t.closest?.(".cart-count-bubble") ||
+          t.classList?.contains("deposit-qty-static"))
+      ) {
+        continue;
+      }
+
       // Skip mutations that only involve our own elements
       const addedByUs = Array.from(mutation.addedNodes).every(
         (n) =>
