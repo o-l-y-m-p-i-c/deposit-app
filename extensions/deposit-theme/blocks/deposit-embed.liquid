@@ -7,6 +7,25 @@
 {%- assign deposit_config = app.metafields["$app:deposit"]["display-config"].value -%}
 <script id="deposit-config" type="application/json">{{ deposit_config | json }}</script>
 
+{%- if deposit_config.depositVariantId -%}
+{%- comment -%}
+  Hide deposit-line controls at parse time — before deposit-embed.js
+  loads — so they never flash on first render or section re-render.
+{%- endcomment -%}
+<style>
+  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"],
+  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ cart-remove-button,
+  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ .quantity-popover__info-button,
+  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ .cart-items__info,
+  .quantity-popover-container:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
+  quantity-popover:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
+  .quantity-popover-wrapper:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
+  tr:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]) cart-remove-button {
+    display: none !important;
+  }
+</style>
+{%- endif -%}
+
 {%- if request.page_type == "product" -%}
   <script id="deposit-product-tags" type="application/json">{{ product.tags | json }}</script>
 {%- endif -%}
