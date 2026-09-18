@@ -679,29 +679,33 @@
    * show the quantity as static text.
    */
   function lockRow(row) {
-    if (!row || row.dataset.depositLocked === "true") return;
-    row.dataset.depositLocked = "true";
-    row.classList.add("deposit-line-locked");
+    if (!row) return;
+    if (row.dataset.depositLocked !== "true") {
+      row.dataset.depositLocked = "true";
+      row.classList.add("deposit-line-locked");
 
-    const qtyInput = row.querySelector(
-      "input[name='updates[]'], input[data-quantity-line-key]",
-    );
-    const qty = qtyInput?.value || "";
+      const qtyInput = row.querySelector(
+        "input[name='updates[]'], input[data-quantity-line-key]",
+      );
+      const qty = qtyInput?.value || "";
 
-    // The quantity control itself is CSS-hidden — put the static qty
-    // text into the cell that wraps the hidden container
-    const qtyCell =
-      row.querySelector("quantity-popover-container")?.parentElement ||
-      row.querySelector(".cart-item__quantity") ||
-      qtyInput?.closest("td");
-    if (qtyCell && !qtyCell.querySelector(".deposit-qty-static")) {
-      const span = document.createElement("span");
-      span.className = "deposit-qty-static";
-      span.style.cssText = "font-size: 0.9em; color: #666;";
-      span.textContent = qty;
-      qtyCell.appendChild(span);
+      // The quantity control itself is CSS-hidden — put the static qty
+      // text into the cell that wraps the hidden container
+      const qtyCell =
+        row.querySelector("quantity-popover-container")?.parentElement ||
+        row.querySelector(".cart-item__quantity") ||
+        qtyInput?.closest("td");
+      if (qtyCell && !qtyCell.querySelector(".deposit-qty-static")) {
+        const span = document.createElement("span");
+        span.className = "deposit-qty-static";
+        span.style.cssText = "font-size: 0.9em; color: #666;";
+        span.textContent = qty;
+        qtyCell.appendChild(span);
+      }
     }
 
+    // Always retry the label — the first pass may run before lastCart
+    // is populated, and the row's locked flag would otherwise block it
     renderDepositFor(row);
   }
 
