@@ -437,6 +437,11 @@
     } catch (e) {}
   }
 
+  /** Lift the CSS loading state (html.deposit-ready). Idempotent. */
+  function markReady() {
+    document.documentElement.classList.add("deposit-ready");
+  }
+
   /**
    * Can the variant be sold at the requested quantity? Used to decide
    * whether a cart write can be safely bundled — over-stock or unknown
@@ -705,6 +710,7 @@
       syncCooldownUntil = Date.now() + delay;
     } finally {
       isSyncing = false;
+      markReady();
       if (pendingSync) {
         pendingSync = false;
         syncDepositLine();
@@ -895,6 +901,10 @@
 
   // Retry once after 1s in case <cart-items> renders async after DOMContentLoaded
   setTimeout(updatePrices, 1000);
+
+  // Failsafe: never leave the loading state up if the first sync can't
+  // complete (cooldown, missing config, persistent errors)
+  setTimeout(markReady, 4000);
 
   // Re-run on cart section re-render (AJAX cart updates)
   // Filter out mutations from our own injected elements to prevent loops
