@@ -159,8 +159,15 @@ export async function publishDepositProduct(shop: string, productId: string) {
  * Get or create a Cart Transform for the shop.
  * If `existingId` is provided, verifies it still exists in Shopify;
  * if it was deleted (e.g. app reinstalled), a new one is created.
+ *
+ * Returns null when Shopify refuses to activate the Function on this
+ * shop's plan (custom apps can only run Functions on Shopify Plus) —
+ * the caller then falls back to the storefront "line" mode.
  */
-export async function getOrCreateCartTransform(shop: string, existingId?: string | null) {
+export async function getOrCreateCartTransform(
+  shop: string,
+  existingId?: string | null,
+): Promise<{ id: string } | null> {
   const existingResult = await adminGraphql(GET_CART_TRANSFORMS, {}, shop);
   const nodes = existingResult?.data?.cartTransforms?.nodes ?? [];
 
@@ -178,8 +185,11 @@ export async function getOrCreateCartTransform(shop: string, existingId?: string
     functionHandle: CART_TRANSFORM_HANDLE,
   }, shop);
   const cartTransform = result?.data?.cartTransformCreate?.cartTransform;
-  const errors = result?.data?.cartTransformCreate?.userErrors;
-  if (errors?.length > 0) {
+  const errors: { message?: string }[] = result?.data?.cartTransformCreate?.userErrors ?? [];
+  if (errors.some((e) => /shopify plus/i.test(e.message ?? ""))) {
+    return null;
+  }
+  if (errors.length > 0) {
     throw new Error(`Failed to create cart transform: ${JSON.stringify(errors)}`);
   }
   if (!cartTransform?.id) {
@@ -215,8 +225,8 @@ export async function deleteValidationIfPresent(shop: string, knownId?: string |
 /**
  * Sync the deposit configuration to the Cart Transform's owner metafield.
  * Eligibility is not part of it — the Function reads each product's
- * $app:deposit.bottles metafield. `mode` is always "expand": the
- * deposit is bundled into the product line as a component.
+ * $app:deposit.bottles metafield. `mode` is "expand" (deposit bundled
+ * into the product line) wherever the Cart Transform could be activated.
  */
 export async function syncFunctionMetafields(
   shop: string,
@@ -269,10 +279,13 @@ export async function syncStorefrontMetafield(
     amountMinor: number;
     currencyCode: string;
     depositVariantId: string | null;
+    depositMode: string;
   },
 ) {
   const config = {
     enabled: settings.enabled,
+    // "line" → the storefront script adds and maintains the deposit line
+    mode: settings.depositMode,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositAmount: (settings.amountMinor / 100).toFixed(2),
@@ -329,9 +342,8 @@ export async function fullSync(
     if (!productId || !variantId) {
       throw new Error("Deposit product is missing a product or variant ID");
     }
-    // Kept published to Online Store so expand components resolve on the
-    // storefront channel. (Whether expand needs this is unverified —
-    // unpublishing is worth testing on a dev store.)
+    // Line mode adds the deposit via the Ajax Cart API, which requires
+    // the product to be published to the Online Store channel.
     await publishDepositProduct(shop, productId);
     await log("publish_deposit_product", "success", "Published to Online Store");
     settings = await prisma.depositSettings.update({
@@ -361,35 +373,55 @@ export async function fullSync(
   }
 
   try {
-    // Always verify the Cart Transform + Validation still exist in Shopify.
-    // They can be deleted when the app is reinstalled, leaving a stale ID.
+    // Always verify the Cart Transform still exists in Shopify — it can be
+    // deleted when the app is reinstalled, leaving a stale ID. The store's
+    // plan decides the mode: Functions available → "expand" (charged
+    // server-side); refused (non-Plus + custom app) → "line" (the
+    // storefront script adds a separate deposit line).
     const cartTransform = await getOrCreateCartTransform(shop, settings.cartTransformId);
-    let cartTransformId = cartTransform.id;
-    if (cartTransformId !== settings.cartTransformId) {
+    const cartTransformId = cartTransform?.id ?? null;
+    const depositMode = cartTransform ? "expand" : "line";
+    if (cartTransformId && cartTransformId !== settings.cartTransformId) {
       await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
     }
+    if (depositMode !== settings.depositMode) {
+      await log(
+        "deposit_mode",
+        "success",
+        depositMode === "line"
+          ? "Store plan can't run Functions from a custom app — using a separate deposit line"
+          : "Cart Transform active — deposit bundled into product lines",
+      );
+    }
 
-    // Expand mode needs no validation — remove the one line mode created
+    // No validation in either mode (expand needs none; on non-Plus stores
+    // Shopify refuses it too) — remove one left from earlier versions
     const deletedValidation = await deleteValidationIfPresent(shop, settings.validationId);
     if (deletedValidation) {
       await log("delete_validation", "success", `Validation deleted: ${deletedValidation.id}`);
     }
 
-    if (cartTransformId !== settings.cartTransformId || settings.validationId) {
+    if (
+      cartTransformId !== settings.cartTransformId ||
+      depositMode !== settings.depositMode ||
+      settings.validationId
+    ) {
       settings = await prisma.depositSettings.update({
         where: { shopId: shop },
-        data: { cartTransformId, validationId: null },
+        data: { cartTransformId, depositMode, validationId: null },
       });
     }
 
-    await syncFunctionMetafields(shop, [cartTransformId], {
-      enabled: settings.enabled,
-      depositMode: settings.depositMode,
-      amountMinor: settings.amountMinor,
-      currencyCode: settings.currencyCode,
-      depositVariantId: settings.depositVariantId,
-    });
-    await log("sync_metafields", "success", "Function metafields synced");
+    if (cartTransformId) {
+      await syncFunctionMetafields(shop, [cartTransformId], {
+        enabled: settings.enabled,
+        depositMode: settings.depositMode,
+        amountMinor: settings.amountMinor,
+        currencyCode: settings.currencyCode,
+        depositVariantId: settings.depositVariantId,
+      });
+      await log("sync_metafields", "success", "Function metafields synced");
+    }
   } catch (error) {
     await log("sync_functions", "error", String(error));
     throw error;
@@ -401,6 +433,7 @@ export async function fullSync(
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
       depositVariantId: settings.depositVariantId,
+      depositMode: settings.depositMode,
     });
     await log("sync_storefront", "success", "Storefront metafield synced");
   } catch (error) {

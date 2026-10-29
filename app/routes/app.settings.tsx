@@ -76,6 +76,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       depositProductId: settings.depositProductId,
       depositVariantId: settings.depositVariantId,
       cartTransformId: settings.cartTransformId,
+      depositMode: settings.depositMode,
       lastSyncedAt: settings.lastSyncedAt,
     },
     includeTags,
@@ -395,10 +396,22 @@ export default function SettingsPage() {
                       <Text as="span" fontWeight="bold">€2.50 + {depositPreview}</Text>
                     </Text>
                     <Text tone="subdued" as="p">
-                      This text appears next to prices on the storefront. In the cart and
-                      checkout the deposit is bundled into each product line, which is
-                      titled "… (incl. deposit)" — on any theme, without storefront scripts.
+                      This text appears next to prices on the storefront.
                     </Text>
+                    {data.settings.depositMode === "line" ? (
+                      <Banner tone="warning">
+                        This store's plan can't run Shopify Functions from a custom app, so the
+                        deposit is added as a separate cart line by the storefront script. Keep the
+                        "Deposit Price Display" app embed on. "Buy it now" and express checkout
+                        buttons skip the cart and won't add the deposit — consider turning off
+                        dynamic checkout buttons for deposit products in your theme settings.
+                      </Banner>
+                    ) : (
+                      <Text tone="subdued" as="p">
+                        In the cart and checkout the deposit is bundled into each product line,
+                        titled "… (incl. deposit)", on any theme.
+                      </Text>
+                    )}
                   </BlockStack>
                 </Card>
 
@@ -406,8 +419,14 @@ export default function SettingsPage() {
                   <Badge tone={data.settings.depositProductId ? "success" : "attention"}>
                     {`Deposit product: ${data.settings.depositProductId ? "Created" : "Not created"}`}
                   </Badge>
-                  <Badge tone={data.settings.cartTransformId ? "success" : "attention"}>
-                    {`Cart Transform: ${data.settings.cartTransformId ? "Active" : "Not created"}`}
+                  <Badge tone={data.settings.cartTransformId ? "success" : "info"}>
+                    {`Cart Transform: ${
+                      data.settings.cartTransformId
+                        ? "Active"
+                        : data.settings.depositMode === "line"
+                          ? "Not available on this plan"
+                          : "Not created"
+                    }`}
                   </Badge>
                   {data.settings.lastSyncedAt && (
                     <Badge tone="info">
@@ -490,9 +509,21 @@ export default function SettingsPage() {
                   ["Include rules", String(data.includeTags.length + data.includeCollections.length)],
                   ["Exclude rules", String(data.excludeTags.length + data.excludeCollections.length)],
                   ["Products with deposit", String(data.depositProductCount)],
-                  ["Cart mode", "Bundled into product line"],
+                  [
+                    "Cart mode",
+                    data.settings.depositMode === "line"
+                      ? "Separate deposit line (storefront script)"
+                      : "Bundled into product line",
+                  ],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
-                  ["Cart Transform", data.settings.cartTransformId ? "Active" : "Pending"],
+                  [
+                    "Cart Transform",
+                    data.settings.cartTransformId
+                      ? "Active"
+                      : data.settings.depositMode === "line"
+                        ? "Not available on this plan"
+                        : "Pending",
+                  ],
                   ["Last sync", data.settings.lastSyncedAt ? new Date(data.settings.lastSyncedAt).toLocaleString() : "Never"],
                 ]}
               />
