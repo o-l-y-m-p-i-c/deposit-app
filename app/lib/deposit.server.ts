@@ -7,7 +7,6 @@ import {
   adminGraphql,
   CREATE_CART_TRANSFORM,
   CREATE_DEPOSIT_PRODUCT,
-  CREATE_VALIDATION,
   DELETE_CART_TRANSFORM,
   DELETE_PRODUCT,
   DELETE_VALIDATION,
@@ -23,7 +22,6 @@ import {
 import { syncEligibility } from "~/lib/eligibility.server";
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
-const VALIDATION_HANDLE = "deposit-validation";
 const VALIDATION_TITLE = "Bottle Deposit";
 
 /**
@@ -191,50 +189,34 @@ export async function getOrCreateCartTransform(shop: string, existingId?: string
 }
 
 /**
- * Get or create this app's Validation object.
+ * Delete this app's Validation object if one exists.
  *
- * The validation Function only enforces the deposit line at checkout
- * buyer-journey steps — on cart interactions it passes, so its errors
- * can't reject the storefront script's own cart mutations (which would
- * deadlock the cart). This is the server-side backstop for "Buy it now",
- * express checkout, blocked JS and direct /cart API calls.
+ * The validation only guarded the retired "line" mode (a separate
+ * deposit line added by the storefront script). In expand mode the Cart
+ * Transform adds the deposit server-side, so there is nothing to enforce.
  */
-export async function getOrCreateValidation(shop: string, existingId?: string | null) {
+export async function deleteValidationIfPresent(shop: string, knownId?: string | null) {
   const existingResult = await adminGraphql(GET_VALIDATIONS, {}, shop);
   const nodes = existingResult?.data?.validations?.nodes ?? [];
+  const match = nodes.find(
+    (n: { id: string; title?: string }) =>
+      n.id === knownId || n.title === VALIDATION_TITLE,
+  );
+  if (!match) return null;
 
-  // Reuse the stored ID if it still exists, else one created earlier
-  const match =
-    (existingId && nodes.find((n: { id: string }) => n.id === existingId)) ||
-    nodes.find((n: { title?: string }) => n.title === VALIDATION_TITLE);
-  if (match) return match;
-
-  const result = await adminGraphql(CREATE_VALIDATION, {
-    validation: {
-      title: VALIDATION_TITLE,
-      functionHandle: VALIDATION_HANDLE,
-      enable: true,
-      blockOnFailure: false,
-    },
-  }, shop);
-  const validation = result?.data?.validationCreate?.validation;
-  const errors = result?.data?.validationCreate?.userErrors;
+  const result = await adminGraphql(DELETE_VALIDATION, { id: match.id }, shop);
+  const errors = result?.data?.validationDelete?.userErrors;
   if (errors?.length > 0) {
-    throw new Error(`Failed to create validation: ${JSON.stringify(errors)}`);
+    throw new Error(`Failed to delete validation: ${JSON.stringify(errors)}`);
   }
-  if (!validation?.id) {
-    throw new Error("Validation was created without an ID");
-  }
-  return validation;
+  return match;
 }
 
 /**
- * Sync the deposit configuration to function owner metafields
- * (Cart Transform + Validation). Eligibility is not part of it — the
- * Functions read each product's $app:deposit.bottles metafield.
- * Both functions read the same config; `mode` decides which one acts:
- *   "line"   — validation enforces a standalone deposit line (default)
- *   "expand" — cart transform bundles deposit as a line component
+ * Sync the deposit configuration to the Cart Transform's owner metafield.
+ * Eligibility is not part of it — the Function reads each product's
+ * $app:deposit.bottles metafield. `mode` is always "expand": the
+ * deposit is bundled into the product line as a component.
  */
 export async function syncFunctionMetafields(
   shop: string,
@@ -347,8 +329,9 @@ export async function fullSync(
     if (!productId || !variantId) {
       throw new Error("Deposit product is missing a product or variant ID");
     }
-    // Line mode adds the deposit via the Ajax Cart API, which requires
-    // the product to be published to the Online Store channel.
+    // Kept published to Online Store so expand components resolve on the
+    // storefront channel. (Whether expand needs this is unverified —
+    // unpublishing is worth testing on a dev store.)
     await publishDepositProduct(shop, productId);
     await log("publish_deposit_product", "success", "Published to Online Store");
     settings = await prisma.depositSettings.update({
@@ -386,22 +369,20 @@ export async function fullSync(
       await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
     }
 
-    // Checkout-only validation — server-side enforcement of the deposit
-    // line (see getOrCreateValidation for why it skips cart interactions)
-    const validation = await getOrCreateValidation(shop, settings.validationId);
-    const validationId = validation.id;
-    if (validationId !== settings.validationId) {
-      await log("create_validation", "success", `Validation ready: ${validationId}`);
+    // Expand mode needs no validation — remove the one line mode created
+    const deletedValidation = await deleteValidationIfPresent(shop, settings.validationId);
+    if (deletedValidation) {
+      await log("delete_validation", "success", `Validation deleted: ${deletedValidation.id}`);
     }
 
-    if (cartTransformId !== settings.cartTransformId || validationId !== settings.validationId) {
+    if (cartTransformId !== settings.cartTransformId || settings.validationId) {
       settings = await prisma.depositSettings.update({
         where: { shopId: shop },
-        data: { cartTransformId, validationId },
+        data: { cartTransformId, validationId: null },
       });
     }
 
-    await syncFunctionMetafields(shop, [cartTransformId, validationId], {
+    await syncFunctionMetafields(shop, [cartTransformId], {
       enabled: settings.enabled,
       depositMode: settings.depositMode,
       amountMinor: settings.amountMinor,

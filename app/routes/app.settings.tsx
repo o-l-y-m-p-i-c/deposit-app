@@ -395,7 +395,9 @@ export default function SettingsPage() {
                       <Text as="span" fontWeight="bold">€2.50 + {depositPreview}</Text>
                     </Text>
                     <Text tone="subdued" as="p">
-                      This text appears next to prices on the storefront.
+                      This text appears next to prices on the storefront. In the cart and
+                      checkout the deposit is bundled into each product line, which is
+                      titled "… (incl. deposit)" — on any theme, without storefront scripts.
                     </Text>
                   </BlockStack>
                 </Card>
@@ -488,6 +490,7 @@ export default function SettingsPage() {
                   ["Include rules", String(data.includeTags.length + data.includeCollections.length)],
                   ["Exclude rules", String(data.excludeTags.length + data.excludeCollections.length)],
                   ["Products with deposit", String(data.depositProductCount)],
+                  ["Cart mode", "Bundled into product line"],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
                   ["Cart Transform", data.settings.cartTransformId ? "Active" : "Pending"],
                   ["Last sync", data.settings.lastSyncedAt ? new Date(data.settings.lastSyncedAt).toLocaleString() : "Never"],

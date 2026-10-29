@@ -18,7 +18,9 @@ const input = (bottles = "1") => ({
       merchandise: {
         __typename: "ProductVariant",
         id: "gid://shopify/ProductVariant/1",
+        title: "0.5 L",
         product: {
+          title: "Mineral Water",
           bottles: bottles === null ? null : { value: bottles },
         },
       },
@@ -51,6 +53,23 @@ describe("Deposit rules", () => {
         price: { adjustment: { fixedPricePerUnit: { amount: "0.10" } } },
       },
     ]);
+  });
+
+  test("titles the expanded line as including the deposit", () => {
+    expect(cartTransformRun(input()).operations[0].lineExpand.title).toBe(
+      "Mineral Water - 0.5 L (incl. deposit)",
+    );
+  });
+
+  test("ignores line mode configs (retired) so nothing double-charges", () => {
+    const lineMode = input();
+    lineMode.cartTransform.metafield.value = JSON.stringify({
+      enabled: true,
+      mode: "line",
+      amountMinor: 10,
+      depositVariantId: "gid://shopify/ProductVariant/2",
+    });
+    expect(cartTransformRun(lineMode)).toEqual({ operations: [] });
   });
 
   test("converts the deposit into presentment currency", () => {

@@ -21,15 +21,13 @@
  *   "enabled": true,
  *   "amountMinor": 10,
  *   "currencyCode": "EUR",
- *   "depositVariantId": "gid://shopify/ProductVariant/xxx"
+ *   "depositVariantId": "gid://shopify/ProductVariant/xxx",
+ *   "titleSuffix": "(incl. deposit)"   // optional
  * }
  *
  * mode: "expand" = bundle the deposit as a line component (this function).
- *       "line"   = deposit is a standalone cart line managed by the
- *                  storefront script + deposit-validation function;
- *                  this function returns no operations.
- *       missing  = treated as "line" so old configs can't double-charge
- *                  once the storefront script starts adding the line.
+ *       Anything else (the retired "line" mode, or a missing value) is a
+ *       no-op so a stale config can never double-charge.
  */
 
 /**
@@ -69,6 +67,8 @@ export function cartTransformRun(input) {
     return NO_CHANGES;
   }
   const depositAmount = ((amountMinor / 100) * presentmentCurrencyRate).toFixed(2);
+  const titleSuffix =
+    typeof config.titleSuffix === "string" ? config.titleSuffix : "(incl. deposit)";
 
   /** @type {any[]} */
   const operations = [];
@@ -96,10 +96,18 @@ export function cartTransformRun(input) {
       continue;
     }
 
+    // Cart line title tells the customer the price includes the deposit
+    const variantTitle =
+      variant.title && variant.title !== "Default Title" ? ` - ${variant.title}` : "";
+    const title = [`${product.title}${variantTitle}`, titleSuffix]
+      .filter(Boolean)
+      .join(" ");
+
     // Expand the line: original product + deposit component
     operations.push({
       lineExpand: {
         cartLineId: line.id,
+        title,
         expandedCartItems: [
           {
             merchandiseId: variant.id,
