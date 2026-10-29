@@ -17,16 +17,16 @@
  *   - the deposit quantity was changed by the customer
  *   - the deposit product was added manually with no eligible products
  *
+ * Eligibility comes from each product's $app:deposit.bottles metafield
+ * (deposit units per product unit), written by the app's server-side
+ * sync — the same data the storefront script reads via the app proxy.
+ *
  * Configuration JSON shape (stored in the Validation owner metafield
  * $app:deposit -> function-configuration):
  * {
  *   "enabled": true,
  *   "mode": "line",
- *   "depositVariantId": "gid://shopify/ProductVariant/xxx",
- *   "includeTags": [...],
- *   "includeCollectionIds": [...],
- *   "excludeTags": [...],
- *   "excludeCollectionIds": [...]
+ *   "depositVariantId": "gid://shopify/ProductVariant/xxx"
  * }
  */
 
@@ -86,11 +86,9 @@ export function cartValidationsGenerateRun(input) {
     const product = merchandise.product;
     if (!product) continue;
 
-    const included = product.hasIncludedTag || product.inIncludedCollection;
-    const excluded = product.hasExcludedTag || product.inExcludedCollection;
-
-    if (included && !excluded) {
-      expected += line.quantity;
+    const bottles = parseInt(product.bottles?.value ?? "", 10);
+    if (bottles > 0) {
+      expected += line.quantity * bottles;
     }
   }
 

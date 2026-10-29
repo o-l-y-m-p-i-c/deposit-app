@@ -17,8 +17,18 @@ api_version = "2026-07"
   topics = [ "products/update" ]
 
   [[webhooks.subscriptions]]
+  uri = "/webhooks/products-update"
+  topics = [ "products/delete" ]
+
+  [[webhooks.subscriptions]]
   uri = "/webhooks/collections-update"
   topics = [ "collections/update" ]
+
+[app_proxy]
+# Storefront → /apps/deposit/eligibility → {url}/eligibility
+url = "https://deposit-app-ey0c.onrender.com/proxy"
+subpath = "deposit"
+prefix = "apps"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes

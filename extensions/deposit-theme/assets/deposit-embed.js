@@ -16,8 +16,10 @@
  *    (Different properties keep the lines separate — Shopify does not
  *    merge same-variant items with different properties.)
  *
- * Eligibility mirrors the server: product tags via /products/{handle}.js,
- * collection membership via /collections/{handle}/products.json.
+ * Eligibility is decided server-side: the app writes deposit units per
+ * product ($app:deposit.bottles metafield) — the same data the checkout
+ * Functions read. This script gets it from Liquid seeds (current product,
+ * cart lines) and the /apps/deposit/eligibility app proxy, batched.
  */
 
 (function () {
@@ -29,10 +31,6 @@
     depositAmount: "0.10",
     currencyCode: "EUR",
     depositVariantId: null,
-    includeTags: [],
-    excludeTags: [],
-    includeCollections: [],
-    excludeCollections: [],
   };
 
   if (configScript) {
@@ -67,22 +65,27 @@
   // Locale-aware currency formatting — renders "€0.10" not "0.10 EUR".
   // Intl throws on an unknown locale/currency; fall back to plain text
   // so a bad value can't abort the script before markReady().
-  let depositPrice;
+  let formatMoney = (n) => `${n.toFixed(2)} ${shopCurrency}`;
   let currencySymbols = [];
   try {
     const fmt = new Intl.NumberFormat(
       document.documentElement.lang || undefined,
       { style: "currency", currency: shopCurrency },
     );
-    depositPrice = fmt.format(depositNumber);
+    formatMoney = (n) => fmt.format(n);
     currencySymbols = fmt
       .formatToParts(1)
       .filter((p) => p.type === "currency")
       .map((p) => p.value);
-  } catch (e) {
-    depositPrice = `${depositNumber.toFixed(2)} ${shopCurrency}`;
+  } catch (e) {}
+
+  /** Label text for a product carrying `bottles` deposit units. */
+  function depositTextFor(bottles) {
+    if (bottles > 1) {
+      return `${formatMoney(Math.round(depositNumber * bottles * 100) / 100)} deposit (${bottles} bottles)`;
+    }
+    return `${formatMoney(depositNumber)} per bottle`;
   }
-  const depositText = `${depositPrice} per bottle`;
 
   // Theme-agnostic price detection: a price element is one whose text
   // carries a currency marker and whose digits equal one of the
@@ -115,17 +118,19 @@
 
   const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
 
-  const includeTags = (config.includeTags || []).map((t) => t.toLowerCase());
-  const excludeTags = (config.excludeTags || []).map((t) => t.toLowerCase());
-  const includeCollections = config.includeCollections || [];
-  const excludeCollections = config.excludeCollections || [];
-
-  // Cache of product handle -> tags
-  const tagCache = new Map();
   // Cache of product handle -> Promise<product JSON | null>
   const productCache = new Map();
-  // Cache of collection handle -> Promise<Set<productHandle>>
-  const collectionCache = new Map();
+  // Cache of product ID -> Promise<deposit units> (0 = no deposit)
+  const bottlesCache = new Map();
+  // Server-rendered seeds (current product, cart lines) — positive only
+  try {
+    const seeds = JSON.parse(
+      document.getElementById("deposit-bottles")?.textContent || "{}",
+    );
+    for (const [id, bottles] of Object.entries(seeds)) {
+      if (Number(bottles) > 0) bottlesCache.set(String(id), Promise.resolve(Number(bottles)));
+    }
+  } catch (e) {}
   // Handle of the deposit product (read from cart, for row detection)
   let depositHandle = null;
 
@@ -146,7 +151,7 @@
   // no double render.
   let lastCart = null;
   const variantMeta = new Map(); // vid -> {key, handle, qty} for product lines
-  const variantEligible = new Map(); // vid -> bool
+  const variantBottles = new Map(); // vid -> deposit units per unit (0 = none)
   const variantStock = new Map(); // vid -> {quantity, policy}
   const depositKeyFor = new Map(); // product vid -> deposit line key
 
@@ -194,24 +199,6 @@
   const nativeFetch = window.fetch.bind(window);
 
   /**
-   * Format a number in European style (e.g., 0.10 -> "0,10")
-   */
-  function formatPrice(amount) {
-    return amount.replace(".", ",");
-  }
-
-  /**
-   * Check if a product is eligible for deposit based on its tags.
-   */
-  function isEligibleTags(tags) {
-    if (!Array.isArray(tags)) return false;
-    const lower = tags.map((t) => t.toLowerCase());
-    const included = includeTags.some((t) => lower.includes(t));
-    const excluded = excludeTags.some((t) => lower.includes(t));
-    return { included, excluded };
-  }
-
-  /**
    * Fetch a product's storefront JSON (cached per handle). Resolves
    * null for 404. Throws on transient failures — the caller must decide
    * whether a missing eligibility signal is safe to act on.
@@ -240,70 +227,47 @@
     return promise;
   }
 
-  /** Product tags for a handle (cached). Throws like getProduct. */
-  async function getProductTags(handle) {
-    if (tagCache.has(handle)) return tagCache.get(handle);
-    const product = await getProduct(handle);
-    const tags = product?.tags || [];
-    tagCache.set(handle, tags);
-    return tags;
-  }
+  // Batched lookups waiting for the next proxy call: id -> {resolve, reject}
+  let bottlesQueue = new Map();
+  let bottlesTimer = null;
+  const ELIGIBILITY_URL =
+    (window.Shopify?.routes?.root || "/") + "apps/deposit/eligibility";
 
   /**
-   * Fetch the set of product handles in a collection (cached).
-   * Throws on transient failures — partial data would produce a wrong
-   * eligibility answer, so we abort instead of guessing.
+   * Deposit units per unit for a product ID (0 = no deposit), from the
+   * server. Lookups in the same tick share one app proxy request.
+   * Rejects on transient failures — the caller must not act on a guess.
    */
-  function getCollectionProducts(handle) {
-    if (collectionCache.has(handle)) return collectionCache.get(handle);
-    const promise = (async () => {
-      const handles = new Set();
-      for (let page = 1; page <= 10; page++) {
-        const res = await nativeFetch(
-          `/collections/${handle}/products.json?limit=250&page=${page}`,
-        );
-        if (!res.ok) throw new Error(`collection fetch ${res.status}`);
-        const data = await res.json();
-        const products = data.products || [];
-        products.forEach((p) => handles.add(p.handle));
-        if (products.length < 250) break;
-      }
-      return handles;
-    })();
-    promise.catch(() => collectionCache.delete(handle));
-    collectionCache.set(handle, promise);
+  function getBottles(productId) {
+    const id = String(productId);
+    if (bottlesCache.has(id)) return bottlesCache.get(id);
+    const promise = new Promise((resolve, reject) => {
+      bottlesQueue.set(id, { resolve, reject });
+      if (!bottlesTimer) bottlesTimer = setTimeout(flushBottles, 0);
+    });
+    promise.catch(() => bottlesCache.delete(id));
+    bottlesCache.set(id, promise);
     return promise;
   }
 
-  async function inCollection(productHandle, collectionHandles) {
-    for (const h of collectionHandles) {
-      const set = await getCollectionProducts(h);
-      if (set.has(productHandle)) return true;
+  async function flushBottles() {
+    const batch = bottlesQueue;
+    bottlesQueue = new Map();
+    bottlesTimer = null;
+    const ids = [...batch.keys()];
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      try {
+        const res = await nativeFetch(`${ELIGIBILITY_URL}?ids=${chunk.join(",")}`, {
+          headers: { Accept: "application/json" },
+        });
+        if (!res.ok) throw new Error(`eligibility ${res.status}`);
+        const data = await res.json();
+        chunk.forEach((id) => batch.get(id).resolve(Number(data?.products?.[id]) || 0));
+      } catch (e) {
+        chunk.forEach((id) => batch.get(id).reject(e));
+      }
     }
-    return false;
-  }
-
-  /**
-   * Full eligibility check mirroring the Function:
-   *   included = tag match OR collection match
-   *   excluded = tag match OR collection match
-   *   eligible = included && !excluded
-   */
-  async function isEligibleItem(item) {
-    const handle = item.handle;
-    if (!handle) return false;
-
-    const { included: tagIn, excluded: tagOut } = isEligibleTags(
-      await getProductTags(handle),
-    );
-
-    const included =
-      tagIn || (await inCollection(handle, includeCollections));
-    if (!included) return false;
-
-    const excluded =
-      tagOut || (await inCollection(handle, excludeCollections));
-    return !excluded;
   }
 
   // ------------------------------------------------------------------
@@ -402,7 +366,7 @@
    * a child) survives themes and currency apps that rewrite the price
    * element's own text.
    */
-  function appendDepositText(priceElement) {
+  function appendDepositText(priceElement, bottles) {
     if (!priceElement || hasLabel(priceElement)) return;
 
     const depositSpan = document.createElement("span");
@@ -410,7 +374,7 @@
     depositSpan.dataset.depositLabel = "true";
     depositSpan.style.cssText =
       "font-size: 0.85em; color: #666; margin-left: 4px; display: inline;";
-    depositSpan.textContent = "+ " + depositText;
+    depositSpan.textContent = "+ " + depositTextFor(bottles);
 
     priceElement.after(depositSpan);
   }
@@ -436,21 +400,16 @@
     if (!handle) return null;
     const container = productPageContainer();
 
-    // Seed the tag cache so eligibility skips one product fetch
-    const tagsScript = document.getElementById("deposit-product-tags");
-    if (tagsScript && !tagCache.has(handle)) {
-      try {
-        tagCache.set(handle, JSON.parse(tagsScript.textContent));
-      } catch (e) {}
-    }
-
     // The merchant placed the Liquid "Deposit Price" block — don't double up
     if (container.querySelector("[data-deposit-block]")) return container;
 
     try {
       const product = await getProduct(handle);
-      if (!product || !(await isEligibleItem({ handle }))) return container;
-      findPriceElements(container, productPrices(product)).forEach(appendDepositText);
+      const bottles = product ? await getBottles(product.id) : 0;
+      if (!bottles) return container;
+      findPriceElements(container, productPrices(product)).forEach((el) =>
+        appendDepositText(el, bottles),
+      );
     } catch (e) {
       // Transient fetch failure — the next pass retries
     }
@@ -491,11 +450,12 @@
     byHandle.forEach(async (cards, handle) => {
       try {
         const product = await getProduct(handle);
-        if (!product || !(await isEligibleItem({ handle }))) return;
+        const bottles = product ? await getBottles(product.id) : 0;
+        if (!bottles) return;
         const prices = productPrices(product);
         cards.forEach((card) => {
           const [priceEl] = findPriceElements(card, prices);
-          if (priceEl) appendDepositText(priceEl);
+          if (priceEl) appendDepositText(priceEl, bottles);
         });
       } catch (e) {
         // Transient fetch failure — the next pass retries
@@ -550,27 +510,32 @@
   }
 
   /**
-   * Resolve and cache a variant's eligibility (per product — all
-   * variants of a product share eligibility).
+   * Resolve and cache a variant's deposit units (per product — all
+   * variants of a product share them). Throws on transient failures.
    */
-  async function ensureEligible(vid, handle) {
-    if (variantEligible.has(vid)) return variantEligible.get(vid);
-    const eligible = await isEligibleItem({ handle, variant_id: vid });
-    variantEligible.set(vid, eligible);
-    return eligible;
+  async function ensureBottles(vid, productId) {
+    if (variantBottles.has(vid)) return variantBottles.get(vid);
+    const bottles = await getBottles(productId);
+    variantBottles.set(vid, bottles);
+    return bottles;
   }
 
   /**
-   * Expected deposit qty for a variant, optionally substituting one
-   * line's quantity (used when intercepting a pending change).
+   * Cart quantity of a variant across its lines, optionally substituting
+   * one line's quantity (used when intercepting a pending change).
    */
-  function expectedQty(vid, changedKey, newQty) {
+  function productQty(vid, changedKey, newQty) {
     let sum = 0;
     for (const i of lastCart?.items || []) {
       if (i.variant_id !== vid) continue;
       sum += i.key === changedKey ? newQty : i.quantity;
     }
     return sum;
+  }
+
+  /** Expected deposit qty for a variant: its quantity × deposit units. */
+  function expectedQty(vid, changedKey, newQty) {
+    return productQty(vid, changedKey, newQty) * (variantBottles.get(vid) || 0);
   }
 
   /**
@@ -584,9 +549,9 @@
       // Shared cached fetch — also seeds variantStock
       const product = await getProduct(handle);
       if (!product) return;
-      const eligible = await isEligibleItem({ handle });
+      const bottles = await getBottles(product.id);
       (product.variants || []).forEach((v) => {
-        variantEligible.set(Number(v.id), eligible);
+        variantBottles.set(Number(v.id), bottles);
       });
     } catch (e) {}
   }
@@ -625,10 +590,12 @@
       for (const a of adds) {
         const vid = Number(a.id);
         const qty = Number(a.quantity || 1);
-        if (!variantEligible.get(vid) || vid === DEPOSIT_VARIANT_ID) continue;
+        const bottles = variantBottles.get(vid);
+        if (!bottles || vid === DEPOSIT_VARIANT_ID) continue;
         // Water add will fail server-side on inventory — skip deposit
-        if (!canSell(vid, expectedQty(vid) + qty)) continue;
-        const newExpected = expectedQty(vid) + qty;
+        const newProductQty = productQty(vid) + qty;
+        if (!canSell(vid, newProductQty)) continue;
+        const newExpected = newProductQty * bottles;
         const depKey = depositKeyFor.get(vid);
         const p = depKey
           ? postCart("/cart/change.js", {
@@ -679,14 +646,21 @@
       const vid = item.variant_id;
 
       if (vid === DEPOSIT_VARIANT_ID) {
-        // Pin deposit edits back to the expected quantity
+        // Pin deposit edits back to the expected quantity (units not
+        // known yet → keep the current quantity; sync settles it)
         const forVid = Number(item.properties?._deposit_for);
+        if (!variantBottles.has(forVid)) {
+          return {
+            url: "/cart/change.js",
+            body: JSON.stringify({ ...data, quantity: item.quantity }),
+          };
+        }
         return {
           url: "/cart/change.js",
           body: JSON.stringify({ ...data, quantity: expectedQty(forVid) }),
         };
       }
-      if (!variantEligible.get(vid)) return null;
+      if (!variantBottles.get(vid)) return null;
       // Over-stock → pass through to native /cart/change so Shopify
       // returns its inventory error (update.js would cap silently)
       if (!canSell(vid, qty)) return null;
@@ -723,10 +697,10 @@
         const vid = item.variant_id;
         if (vid === DEPOSIT_VARIANT_ID) {
           const forVid = Number(item.properties?._deposit_for);
-          updates[key] = expectedQty(forVid);
+          updates[key] = variantBottles.has(forVid) ? expectedQty(forVid) : item.quantity;
           continue;
         }
-        if (!variantEligible.get(vid)) continue;
+        if (!variantBottles.get(vid)) continue;
         const depKey = depositKeyFor.get(vid);
         if (!depKey) continue;
         updates[depKey] = expectedQty(vid, key, Number(qtyStr));
@@ -776,16 +750,25 @@
       indexCart(cart);
       patchCartCount();
 
+      // Resolve every line's deposit units up front — one batched proxy
+      // request instead of one per line. Throws → abort without writing.
+      await Promise.all(
+        (cart.items || [])
+          .filter((i) => i.variant_id !== DEPOSIT_VARIANT_ID)
+          .map((i) => ensureBottles(i.variant_id, i.product_id)),
+      );
+
       for (const item of cart.items || []) {
         if (item.variant_id === DEPOSIT_VARIANT_ID) {
           depositLines.push(item);
           continue;
         }
         // Throws on transient fetch failures → abort without writing
-        if (await ensureEligible(item.variant_id, item.handle)) {
+        const bottles = await ensureBottles(item.variant_id, item.product_id);
+        if (bottles > 0) {
           expectedByVariant.set(
             item.variant_id,
-            (expectedByVariant.get(item.variant_id) || 0) + item.quantity,
+            (expectedByVariant.get(item.variant_id) || 0) + item.quantity * bottles,
           );
         }
       }

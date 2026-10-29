@@ -4,7 +4,7 @@ import { describe, beforeAll, test, expect } from "vitest";
 import { buildFunction, getFunctionInfo, loadSchema, loadInputQuery, loadFixture, validateTestAssets, runFunction } from "@shopify/shopify-function-test-helpers";
 import { cartTransformRun } from "../src/cart_transform_run.js";
 
-const input = (overrides = {}) => ({
+const input = (bottles = "1") => ({
   presentmentCurrencyRate: "1.00",
   cart: {
     lines: [{
@@ -19,11 +19,7 @@ const input = (overrides = {}) => ({
         __typename: "ProductVariant",
         id: "gid://shopify/ProductVariant/1",
         product: {
-          hasIncludedTag: true,
-          inIncludedCollection: false,
-          hasExcludedTag: false,
-          inExcludedCollection: false,
-          ...overrides,
+          bottles: bottles === null ? null : { value: bottles },
         },
       },
     }],
@@ -66,8 +62,17 @@ describe("Deposit rules", () => {
     ).toBe("0.12");
   });
 
-  test("exclusions override inclusions", () => {
-    expect(cartTransformRun(input({ hasExcludedTag: true }))).toEqual({ operations: [] });
+  test("products without the deposit metafield are left alone", () => {
+    expect(cartTransformRun(input(null))).toEqual({ operations: [] });
+  });
+
+  test("zero deposit units means no deposit", () => {
+    expect(cartTransformRun(input("0"))).toEqual({ operations: [] });
+  });
+
+  test("multipacks get one deposit unit per bottle", () => {
+    const result = cartTransformRun(input("6"));
+    expect(result.operations[0].lineExpand.expandedCartItems[1].quantity).toBe(6);
   });
 });
 

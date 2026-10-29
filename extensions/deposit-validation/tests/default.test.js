@@ -11,18 +11,14 @@ const config = (overrides = {}) =>
     ...overrides,
   });
 
-const productLine = (id, quantity, product = {}) => ({
+const productLine = (id, quantity, bottles = "1") => ({
   id: `gid://shopify/CartLine/${id}`,
   quantity,
   merchandise: {
     __typename: "ProductVariant",
     id: `gid://shopify/ProductVariant/${id}`,
     product: {
-      hasIncludedTag: true,
-      inIncludedCollection: false,
-      hasExcludedTag: false,
-      inExcludedCollection: false,
-      ...product,
+      bottles: bottles === null ? null : { value: bottles },
     },
   },
 });
@@ -33,12 +29,7 @@ const depositLine = (quantity) => ({
   merchandise: {
     __typename: "ProductVariant",
     id: DEPOSIT_VARIANT,
-    product: {
-      hasIncludedTag: false,
-      inIncludedCollection: false,
-      hasExcludedTag: false,
-      inExcludedCollection: false,
-    },
+    product: { bottles: null },
   },
 });
 
@@ -76,7 +67,7 @@ describe("Deposit validation", () => {
   test("ignores ineligible products", () => {
     const result = cartValidationsGenerateRun(
       input([
-        productLine(1, 4, { hasIncludedTag: false, inIncludedCollection: false }),
+        productLine(1, 4, null),
         depositLine(0),
       ]),
     );
@@ -89,6 +80,13 @@ describe("Deposit validation", () => {
       input([productLine(1, 2), productLine(2, 3), depositLine(5)]),
     );
     expect(result.operations).toEqual([]);
+  });
+
+  test("multipacks need one deposit unit per bottle", () => {
+    const ok = cartValidationsGenerateRun(input([productLine(1, 2, "6"), depositLine(12)]));
+    expect(ok.operations).toEqual([]);
+    const short = cartValidationsGenerateRun(input([productLine(1, 2, "6"), depositLine(2)]));
+    expect(short.operations[0].validationAdd.errors.length).toBe(1);
   });
 
   test("no-ops when mode is expand", () => {

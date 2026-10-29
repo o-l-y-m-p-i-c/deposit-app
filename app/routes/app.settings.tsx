@@ -22,6 +22,7 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useFetcher } from "@remix-run/react";
 import { authenticate } from "~/shopify.server";
+import { prisma } from "~/db.server";
 import { getSettings, updateSettings } from "~/models/settings.server";
 import { getRules, addRule, removeRule } from "~/models/rules.server";
 import { fullSync, cleanupShop } from "~/lib/deposit.server";
@@ -36,6 +37,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const settings = await getSettings(session.shop);
   const rules = await getRules(session.shop);
+  const depositProductCount = await prisma.depositProduct.count({
+    where: { shopId: session.shop },
+  });
 
   const includeTags = rules.filter((r) => r.effect === "INCLUDE" && r.resourceType === "TAG");
   const includeCollections = rules.filter((r) => r.effect === "INCLUDE" && r.resourceType === "COLLECTION");
@@ -80,6 +84,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     excludeCollections,
     availableTags,
     collections,
+    depositProductCount,
   });
 }
 
@@ -171,7 +176,8 @@ export async function action({ request }: ActionFunctionArgs) {
   if (intent === "sync") {
     try {
       const appInstallationId = await getAppInstallationId(admin);
-      await fullSync(session.shop, appInstallationId);
+      // Manual sync rewrites every product flag (repairs manual edits)
+      await fullSync(session.shop, appInstallationId, { force: true });
       return json({ success: true, message: "Sync complete" });
     } catch (e) {
       return json({ error: String(e) }, { status: 500 });
@@ -481,6 +487,7 @@ export default function SettingsPage() {
                 rows={[
                   ["Include rules", String(data.includeTags.length + data.includeCollections.length)],
                   ["Exclude rules", String(data.excludeTags.length + data.excludeCollections.length)],
+                  ["Products with deposit", String(data.depositProductCount)],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
                   ["Cart Transform", data.settings.cartTransformId ? "Active" : "Pending"],
                   ["Last sync", data.settings.lastSyncedAt ? new Date(data.settings.lastSyncedAt).toLocaleString() : "Never"],

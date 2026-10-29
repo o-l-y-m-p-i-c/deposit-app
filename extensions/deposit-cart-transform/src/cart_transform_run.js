@@ -12,16 +12,16 @@
  * ($app:deposit -> function-configuration) and expands eligible
  * cart lines to include a deposit component.
  *
+ * Eligibility is not evaluated here: the app's server-side sync writes
+ * $app:deposit.bottles (deposit units per product unit) onto each
+ * eligible product. No metafield = no deposit.
+ *
  * Configuration JSON shape (stored in metafield):
  * {
  *   "enabled": true,
  *   "amountMinor": 10,
- *   "currencyCode": "€",
- *   "depositVariantId": "gid://shopify/ProductVariant/xxx",
- *   "includeTags": ["water", "bottle"],
- *   "includeCollectionIds": ["gid://shopify/Collection/xxx"],
- *   "excludeTags": ["19l-bottle"],
- *   "excludeCollectionIds": ["gid://shopify/Collection/yyy"]
+ *   "currencyCode": "EUR",
+ *   "depositVariantId": "gid://shopify/ProductVariant/xxx"
  * }
  *
  * mode: "expand" = bundle the deposit as a line component (this function).
@@ -90,15 +90,9 @@ export function cartTransformRun(input) {
     const product = variant.product;
     if (!product) continue;
 
-    // Check tags and collections using values loaded from the owner metafield.
-    // Each aliased field is evaluated independently by Shopify's input query.
-    // Missing or empty rule arrays evaluate to false.
-    // Exclusion fields remain separate from inclusion fields.
-    const included = product.hasIncludedTag || product.inIncludedCollection;
-    const excluded = product.hasExcludedTag || product.inExcludedCollection;
-
-    // Exclusions always win
-    if (!included || excluded) {
+    // Rules (exclusions win) were applied by the eligibility sync
+    const bottles = parseInt(product.bottles?.value ?? "", 10);
+    if (!(bottles > 0)) {
       continue;
     }
 
@@ -120,7 +114,7 @@ export function cartTransformRun(input) {
           },
           {
             merchandiseId: config.depositVariantId,
-            quantity: 1,
+            quantity: bottles,
             price: {
               adjustment: {
                 fixedPricePerUnit: {

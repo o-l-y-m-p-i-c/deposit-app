@@ -15,6 +15,3 @@ description = "t:description"
   [extensions.build]
   path = "dist/function.wasm"
 
-  [extensions.input.variables]
-  namespace = "$app:deposit"
-  key = "function-configuration"

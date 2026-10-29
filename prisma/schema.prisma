@@ -80,3 +80,15 @@ model SyncLog {
 
   @@index([shopId])
 }
+
+// Products that carry a deposit — mirror of the $app:deposit.bottles
+// product metafield. Lets syncs diff instead of rescanning the catalog
+// and serves the storefront eligibility app proxy.
+model DepositProduct {
+  shopId    String
+  productId String   // numeric Shopify product ID (as in storefront JSON)
+  bottles   Int      @default(1) // deposit units per product unit
+  updatedAt DateTime @updatedAt
+
+  @@id([shopId, productId])
+}

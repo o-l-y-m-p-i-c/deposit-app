@@ -1,9 +1,4 @@
-query CartTransformRunInput(
-  $includeTags: [String!]
-  $includeCollectionIds: [ID!]
-  $excludeTags: [String!]
-  $excludeCollectionIds: [ID!]
-) {
+query CartTransformRunInput {
   presentmentCurrencyRate
   cart {
     lines {
@@ -22,10 +17,11 @@ query CartTransformRunInput(
           product {
             id
             title
-            hasIncludedTag: hasAnyTag(tags: $includeTags)
-            inIncludedCollection: inAnyCollection(ids: $includeCollectionIds)
-            hasExcludedTag: hasAnyTag(tags: $excludeTags)
-            inExcludedCollection: inAnyCollection(ids: $excludeCollectionIds)
+            # Deposit units per product unit, written by the app's
+            # eligibility sync (absent = no deposit)
+            bottles: metafield(namespace: "$app:deposit", key: "bottles") {
+              value
+            }
           }
         }
       }

@@ -75,9 +75,23 @@
 </style>
 {%- endif -%}
 
-{%- if request.page_type == "product" -%}
-  <script id="deposit-product-tags" type="application/json">{{ product.tags | json }}</script>
-{%- endif -%}
+{%- comment -%}
+  Seed deposit units for the current product and cart lines from the
+  $app:deposit.bottles metafield, so the script needs no proxy call for
+  them. Only positive values are emitted — a product missing here is
+  looked up through the app proxy, never assumed deposit-free.
+{%- endcomment -%}
+{%- capture deposit_bottles -%}
+  {%- if product -%}
+    {%- assign b = product.metafields["$app:deposit"].bottles.value -%}
+    {%- if b > 0 -%}"{{ product.id }}":{{ b }},{%- endif -%}
+  {%- endif -%}
+  {%- for item in cart.items -%}
+    {%- assign b = item.product.metafields["$app:deposit"].bottles.value -%}
+    {%- if b > 0 -%}"{{ item.product_id }}":{{ b }},{%- endif -%}
+  {%- endfor -%}
+{%- endcapture -%}
+<script id="deposit-bottles" type="application/json">{ {{- deposit_bottles | strip | remove_last: "," -}} }</script>
 
 <script src="{{ 'deposit-embed.js' | asset_url }}" defer></script>
 

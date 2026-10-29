@@ -12,7 +12,6 @@ import {
   DELETE_PRODUCT,
   DELETE_VALIDATION,
   GET_CART_TRANSFORMS,
-  GET_COLLECTION_HANDLES,
   GET_DEPOSIT_PRODUCT,
   GET_PUBLICATIONS,
   GET_VALIDATIONS,
@@ -21,6 +20,7 @@ import {
   UPDATE_DEPOSIT_VARIANT,
   UPDATE_PRODUCT_STATUS,
 } from "~/lib/admin-api.server";
+import { syncEligibility } from "~/lib/eligibility.server";
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
 const VALIDATION_HANDLE = "deposit-validation";
@@ -230,8 +230,9 @@ export async function getOrCreateValidation(shop: string, existingId?: string | 
 
 /**
  * Sync the deposit configuration to function owner metafields
- * (Cart Transform + Validation). Both functions read the same config;
- * `mode` decides which one acts:
+ * (Cart Transform + Validation). Eligibility is not part of it — the
+ * Functions read each product's $app:deposit.bottles metafield.
+ * Both functions read the same config; `mode` decides which one acts:
  *   "line"   — validation enforces a standalone deposit line (default)
  *   "expand" — cart transform bundles deposit as a line component
  */
@@ -245,12 +246,6 @@ export async function syncFunctionMetafields(
     currencyCode: string;
     depositVariantId: string | null;
   },
-  rules: {
-    includeTags: { value: string }[];
-    includeCollections: { resourceId: string | null; value: string }[];
-    excludeTags: { value: string }[];
-    excludeCollections: { resourceId: string | null; value: string }[];
-  },
 ) {
   const config = {
     enabled: settings.enabled,
@@ -258,10 +253,6 @@ export async function syncFunctionMetafields(
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositVariantId: settings.depositVariantId,
-    includeTags: rules.includeTags.map((r) => r.value),
-    includeCollectionIds: rules.includeCollections.map((r) => r.resourceId).filter(Boolean),
-    excludeTags: rules.excludeTags.map((r) => r.value),
-    excludeCollectionIds: rules.excludeCollections.map((r) => r.resourceId).filter(Boolean),
   };
 
   const result = await adminGraphql(SET_METAFIELDS, {
@@ -285,6 +276,8 @@ export async function syncFunctionMetafields(
 /**
  * Sync the deposit display configuration to the shop's app-data metafield.
  * This is read by the Theme App Extension to show deposit text on the storefront.
+ * Per-product eligibility comes from the product metafield (Liquid) and
+ * the eligibility app proxy (storefront script), not from here.
  */
 export async function syncStorefrontMetafield(
   shop: string,
@@ -295,27 +288,7 @@ export async function syncStorefrontMetafield(
     currencyCode: string;
     depositVariantId: string | null;
   },
-  rules: {
-    includeTags: { value: string }[];
-    includeCollections: { resourceId: string | null; value: string }[];
-    excludeTags: { value: string }[];
-    excludeCollections: { resourceId: string | null; value: string }[];
-  },
 ) {
-  // Storefront JS can't evaluate collections by GID — resolve handles.
-  const collectionIds = [
-    ...rules.includeCollections.map((r) => r.resourceId),
-    ...rules.excludeCollections.map((r) => r.resourceId),
-  ].filter((id): id is string => Boolean(id));
-
-  const handleById = new Map<string, string>();
-  if (collectionIds.length > 0) {
-    const result = await adminGraphql(GET_COLLECTION_HANDLES, { ids: collectionIds }, shop);
-    for (const node of result?.data?.nodes ?? []) {
-      if (node?.id && node?.handle) handleById.set(node.id, node.handle);
-    }
-  }
-
   const config = {
     enabled: settings.enabled,
     amountMinor: settings.amountMinor,
@@ -324,14 +297,6 @@ export async function syncStorefrontMetafield(
     depositVariantId: settings.depositVariantId
       ? Number(settings.depositVariantId.split("/").pop())
       : null,
-    includeTags: rules.includeTags.map((r) => r.value),
-    excludeTags: rules.excludeTags.map((r) => r.value),
-    includeCollections: rules.includeCollections
-      .map((r) => (r.resourceId ? handleById.get(r.resourceId) : undefined))
-      .filter(Boolean),
-    excludeCollections: rules.excludeCollections
-      .map((r) => (r.resourceId ? handleById.get(r.resourceId) : undefined))
-      .filter(Boolean),
   };
 
   const result = await adminGraphql(SET_METAFIELDS, {
@@ -355,9 +320,14 @@ export async function syncStorefrontMetafield(
 }
 
 /**
- * Full sync: update deposit price, sync metafields.
+ * Full sync: update deposit price, flag eligible products, sync metafields.
+ * `force` rewrites every eligible product's metafield (manual "Sync now").
  */
-export async function fullSync(shop: string, appInstallationId: string) {
+export async function fullSync(
+  shop: string,
+  appInstallationId: string,
+  { force = false }: { force?: boolean } = {},
+) {
   let settings = await getOrCreateSettings(shop);
   const log = (operation: string, status: string, message: string) =>
     prisma.syncLog.create({ data: { shopId: shop, operation, status, message } });
@@ -391,6 +361,23 @@ export async function fullSync(shop: string, appInstallationId: string) {
   }
 
   try {
+    // Evaluate the rules once, server-side, onto product metafields —
+    // Functions, Liquid and the storefront script all read the result
+    const result = await syncEligibility(shop, await getRulesGrouped(shop), {
+      force,
+      skipProductIds: settings.depositProductId ? [settings.depositProductId] : [],
+    });
+    await log(
+      "sync_eligibility",
+      "success",
+      `${result.total} products with deposit (+${result.flagged} / -${result.unflagged})`,
+    );
+  } catch (error) {
+    await log("sync_eligibility", "error", String(error));
+    throw error;
+  }
+
+  try {
     // Always verify the Cart Transform + Validation still exist in Shopify.
     // They can be deleted when the app is reinstalled, leaving a stale ID.
     const cartTransform = await getOrCreateCartTransform(shop, settings.cartTransformId);
@@ -414,14 +401,13 @@ export async function fullSync(shop: string, appInstallationId: string) {
       });
     }
 
-    const rules = await getRulesGrouped(shop);
     await syncFunctionMetafields(shop, [cartTransformId, validationId], {
       enabled: settings.enabled,
       depositMode: settings.depositMode,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
       depositVariantId: settings.depositVariantId,
-    }, rules);
+    });
     await log("sync_metafields", "success", "Function metafields synced");
   } catch (error) {
     await log("sync_functions", "error", String(error));
@@ -429,13 +415,12 @@ export async function fullSync(shop: string, appInstallationId: string) {
   }
 
   try {
-    const storefrontRules = await getRulesGrouped(shop);
     await syncStorefrontMetafield(shop, appInstallationId, {
       enabled: settings.enabled,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
       depositVariantId: settings.depositVariantId,
-    }, storefrontRules);
+    });
     await log("sync_storefront", "success", "Storefront metafield synced");
   } catch (error) {
     await log("sync_storefront", "error", String(error));
@@ -528,6 +513,8 @@ export async function cleanupShop(shop: string) {
 
   // 4. Delete all rules and settings from the database
   await prisma.depositRule.deleteMany({ where: { shopId: shop } });
+  // Product metafields are app-owned and removed by Shopify on uninstall
+  await prisma.depositProduct.deleteMany({ where: { shopId: shop } });
   await prisma.depositSettings.deleteMany({ where: { shopId: shop } });
   await log("cleanup_db", "success", "Deleted all rules and settings");
 }

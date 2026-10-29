@@ -3102,12 +3102,7 @@ export enum WeightUnit {
   Pounds = 'POUNDS'
 }
 
-export type CartValidationsGenerateRunInputVariables = Exact<{
-  includeTags?: InputMaybe<Array<Scalars['String']['input']> | Scalars['String']['input']>;
-  includeCollectionIds?: InputMaybe<Array<Scalars['ID']['input']> | Scalars['ID']['input']>;
-  excludeTags?: InputMaybe<Array<Scalars['String']['input']> | Scalars['String']['input']>;
-  excludeCollectionIds?: InputMaybe<Array<Scalars['ID']['input']> | Scalars['ID']['input']>;
-}>;
+export type CartValidationsGenerateRunInputVariables = Exact<{ [key: string]: never; }>;
 
 
-export type CartValidationsGenerateRunInput = { __typename?: 'Input', buyerJourney: { __typename?: 'BuyerJourney', step?: BuyerJourneyStep | null }, cart: { __typename?: 'Cart', lines: Array<{ __typename?: 'CartLine', id: string, quantity: number, merchandise: { __typename: 'CustomProduct' } | { __typename: 'ProductVariant', id: string, product: { __typename?: 'Product', id: string, hasIncludedTag: boolean, inIncludedCollection: boolean, hasExcludedTag: boolean, inExcludedCollection: boolean } } }> }, validation: { __typename?: 'Validation', metafield?: { __typename?: 'Metafield', value: string } | null } };
+export type CartValidationsGenerateRunInput = { __typename?: 'Input', buyerJourney: { __typename?: 'BuyerJourney', step?: BuyerJourneyStep | null }, cart: { __typename?: 'Cart', lines: Array<{ __typename?: 'CartLine', id: string, quantity: number, merchandise: { __typename: 'CustomProduct' } | { __typename: 'ProductVariant', id: string, product: { __typename?: 'Product', id: string, bottles?: { __typename?: 'Metafield', value: string } | null } } }> }, validation: { __typename?: 'Validation', metafield?: { __typename?: 'Metafield', value: string } | null } };

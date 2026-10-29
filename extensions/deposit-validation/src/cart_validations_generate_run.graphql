@@ -1,9 +1,4 @@
-query CartValidationsGenerateRunInput(
-  $includeTags: [String!]
-  $includeCollectionIds: [ID!]
-  $excludeTags: [String!]
-  $excludeCollectionIds: [ID!]
-) {
+query CartValidationsGenerateRunInput {
   buyerJourney {
     step
   }
@@ -17,10 +12,11 @@ query CartValidationsGenerateRunInput(
           id
           product {
             id
-            hasIncludedTag: hasAnyTag(tags: $includeTags)
-            inIncludedCollection: inAnyCollection(ids: $includeCollectionIds)
-            hasExcludedTag: hasAnyTag(tags: $excludeTags)
-            inExcludedCollection: inAnyCollection(ids: $excludeCollectionIds)
+            # Deposit units per product unit, written by the app's
+            # eligibility sync (absent = no deposit)
+            bottles: metafield(namespace: "$app:deposit", key: "bottles") {
+              value
+            }
           }
         }
       }
