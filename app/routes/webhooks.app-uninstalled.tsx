@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { prisma } from "~/db.server";
 import { deleteSessionsForShop } from "~/lib/admin-api.server";
+import { authenticate } from "~/shopify.server";
 
 /**
  * Webhook: app/uninstalled
@@ -9,12 +10,14 @@ import { deleteSessionsForShop } from "~/lib/admin-api.server";
  * When a merchant uninstalls the app, Shopify revokes the OAuth
  * access token. We proactively delete all stored sessions for
  * that shop and disable deposit settings.
+ *
+ * authenticate.webhook verifies the HMAC signature and throws a
+ * 401 response for unsigned or forged requests.
  */
 export async function action({ request }: ActionFunctionArgs) {
-  const topic = request.headers.get("X-Shopify-Topic");
-  const shop = request.headers.get("X-Shopify-Shop-Domain");
+  const { shop, topic } = await authenticate.webhook(request);
 
-  if (topic !== "app/uninstalled" || !shop) {
+  if (topic !== "APP_UNINSTALLED") {
     return json({ error: "Invalid webhook" }, { status: 400 });
   }
 

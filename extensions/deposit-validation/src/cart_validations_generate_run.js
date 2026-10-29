@@ -9,7 +9,10 @@
  * Cart Validation Function: Bottle Deposit (separate-line mode)
  *
  * Enforces that the deposit product line always matches the number of
- * deposit-eligible bottles in the cart. Blocks checkout when:
+ * deposit-eligible bottles in the cart. Only runs at checkout steps —
+ * on CART_INTERACTION an error would reject the cart mutation itself
+ * and deadlock the storefront script (can't add water without the
+ * deposit line, can't add the deposit without water). Blocks checkout when:
  *   - the deposit line is missing while eligible products are present
  *   - the deposit quantity was changed by the customer
  *   - the deposit product was added manually with no eligible products
@@ -34,11 +37,21 @@ const NO_ERRORS = {
   operations: [],
 };
 
+/** Buyer journey steps where the deposit line is enforced. */
+const ENFORCED_STEPS = ["CHECKOUT_INTERACTION", "CHECKOUT_COMPLETION"];
+
 /**
  * @param {CartValidationsGenerateRunInput} input
  * @returns {CartValidationsGenerateRunResult}
  */
 export function cartValidationsGenerateRun(input) {
+  // Cart edits (and an unknown step) pass — the storefront script keeps
+  // the deposit line in sync there; checkout is where it must hold
+  const step = input?.buyerJourney?.step;
+  if (!step || !ENFORCED_STEPS.includes(step)) {
+    return NO_ERRORS;
+  }
+
   const configMetafield = input?.validation?.metafield;
   if (!configMetafield?.value) {
     return NO_ERRORS;

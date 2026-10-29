@@ -4,6 +4,9 @@ query CartValidationsGenerateRunInput(
   $excludeTags: [String!]
   $excludeCollectionIds: [ID!]
 ) {
+  buyerJourney {
+    step
+  }
   cart {
     lines {
       id

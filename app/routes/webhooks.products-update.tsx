@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { prisma } from "~/db.server";
+import { authenticate } from "~/shopify.server";
 
 /**
  * Webhook: products/update
@@ -13,10 +14,10 @@ import { prisma } from "~/db.server";
  * (e.g., syncing bottle count metafields).
  */
 export async function action({ request }: ActionFunctionArgs) {
-  const topic = request.headers.get("X-Shopify-Topic");
-  const shop = request.headers.get("X-Shopify-Shop-Domain");
+  // Verifies the HMAC signature; throws 401 for forged requests
+  const { shop, topic } = await authenticate.webhook(request);
 
-  if (topic !== "products/update" || !shop) {
+  if (topic !== "PRODUCTS_UPDATE") {
     return json({ error: "Invalid webhook" }, { status: 400 });
   }
 

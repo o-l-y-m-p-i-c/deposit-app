@@ -7,6 +7,7 @@ import {
   adminGraphql,
   CREATE_CART_TRANSFORM,
   CREATE_DEPOSIT_PRODUCT,
+  CREATE_VALIDATION,
   DELETE_CART_TRANSFORM,
   DELETE_PRODUCT,
   DELETE_VALIDATION,
@@ -22,6 +23,7 @@ import {
 } from "~/lib/admin-api.server";
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
+const VALIDATION_HANDLE = "deposit-validation";
 const VALIDATION_TITLE = "Bottle Deposit";
 
 /**
@@ -189,29 +191,41 @@ export async function getOrCreateCartTransform(shop: string, existingId?: string
 }
 
 /**
- * Delete this app's Validation object if one exists.
+ * Get or create this app's Validation object.
  *
- * In "line" mode a cart validation can't be used: validation errors
- * reject the cart mutation itself, so requiring a deposit line would
- * deadlock the cart (can't add water without deposit, can't add
- * deposit without water). The standalone deposit line is enforced by
- * the storefront script instead.
+ * The validation Function only enforces the deposit line at checkout
+ * buyer-journey steps — on cart interactions it passes, so its errors
+ * can't reject the storefront script's own cart mutations (which would
+ * deadlock the cart). This is the server-side backstop for "Buy it now",
+ * express checkout, blocked JS and direct /cart API calls.
  */
-export async function deleteValidationIfPresent(shop: string, knownId?: string | null) {
+export async function getOrCreateValidation(shop: string, existingId?: string | null) {
   const existingResult = await adminGraphql(GET_VALIDATIONS, {}, shop);
   const nodes = existingResult?.data?.validations?.nodes ?? [];
-  const match = nodes.find(
-    (n: { id: string; title?: string }) =>
-      n.id === knownId || n.title === VALIDATION_TITLE,
-  );
-  if (!match) return null;
 
-  const result = await adminGraphql(DELETE_VALIDATION, { id: match.id }, shop);
-  const errors = result?.data?.validationDelete?.userErrors;
+  // Reuse the stored ID if it still exists, else one created earlier
+  const match =
+    (existingId && nodes.find((n: { id: string }) => n.id === existingId)) ||
+    nodes.find((n: { title?: string }) => n.title === VALIDATION_TITLE);
+  if (match) return match;
+
+  const result = await adminGraphql(CREATE_VALIDATION, {
+    validation: {
+      title: VALIDATION_TITLE,
+      functionHandle: VALIDATION_HANDLE,
+      enable: true,
+      blockOnFailure: false,
+    },
+  }, shop);
+  const validation = result?.data?.validationCreate?.validation;
+  const errors = result?.data?.validationCreate?.userErrors;
   if (errors?.length > 0) {
-    throw new Error(`Failed to delete validation: ${JSON.stringify(errors)}`);
+    throw new Error(`Failed to create validation: ${JSON.stringify(errors)}`);
   }
-  return match;
+  if (!validation?.id) {
+    throw new Error("Validation was created without an ID");
+  }
+  return validation;
 }
 
 /**
@@ -385,22 +399,23 @@ export async function fullSync(shop: string, appInstallationId: string) {
       await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
     }
 
-    // Line mode can't use cart validation — its errors would reject the
-    // cart mutations themselves. Remove any stale Validation object.
-    const deletedValidation = await deleteValidationIfPresent(shop, settings.validationId);
-    if (deletedValidation) {
-      await log("delete_validation", "success", `Validation deleted: ${deletedValidation.id}`);
+    // Checkout-only validation — server-side enforcement of the deposit
+    // line (see getOrCreateValidation for why it skips cart interactions)
+    const validation = await getOrCreateValidation(shop, settings.validationId);
+    const validationId = validation.id;
+    if (validationId !== settings.validationId) {
+      await log("create_validation", "success", `Validation ready: ${validationId}`);
     }
 
-    if (cartTransformId !== settings.cartTransformId || settings.validationId) {
+    if (cartTransformId !== settings.cartTransformId || validationId !== settings.validationId) {
       settings = await prisma.depositSettings.update({
         where: { shopId: shop },
-        data: { cartTransformId, validationId: null },
+        data: { cartTransformId, validationId },
       });
     }
 
     const rules = await getRulesGrouped(shop);
-    await syncFunctionMetafields(shop, [cartTransformId], {
+    await syncFunctionMetafields(shop, [cartTransformId, validationId], {
       enabled: settings.enabled,
       depositMode: settings.depositMode,
       amountMinor: settings.amountMinor,

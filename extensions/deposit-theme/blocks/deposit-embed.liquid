@@ -7,11 +7,20 @@
 {%- assign deposit_config = app.metafields["$app:deposit"]["display-config"].value -%}
 <script id="deposit-config" type="application/json">{{ deposit_config | json }}</script>
 
-{%- if deposit_config.depositVariantId -%}
+{%- if deposit_config.enabled and deposit_config.depositVariantId -%}
 {%- comment -%}
   Hide deposit-line controls at parse time — before deposit-embed.js
   loads — so they never flash on first render or section re-render.
+  Only when enabled: the script exits early when disabled and would
+  never lift the loading overlay below.
 {%- endcomment -%}
+<script>
+  // Inline failsafe: lift the loading overlay even if deposit-embed.js
+  // is blocked, fails to load, or throws before its own failsafe runs
+  setTimeout(function () {
+    document.documentElement.classList.add("deposit-ready");
+  }, 4000);
+</script>
 <style>
   quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"],
   quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ cart-remove-button,

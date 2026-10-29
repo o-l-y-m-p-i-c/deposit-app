@@ -40,21 +40,34 @@
     }
   }
 
-  if (!config.enabled) return;
+  if (!config.enabled) {
+    // Never leave a stale loading overlay up (e.g. cached Liquid output)
+    document.documentElement.classList.add("deposit-ready");
+    return;
+  }
 
-  // Use the shop's active currency
+  // Use the shop's active currency. Shopify.currency is an object
+  // ({active, rate}) on most themes — only accept a string code.
+  const activeCurrency = window.Shopify?.currency?.active;
   const shopCurrency =
-    window.Shopify?.currency?.active ||
-    window.Shopify?.currency ||
+    (typeof activeCurrency === "string" && activeCurrency) ||
     config.currencyCode ||
     "EUR";
 
-  // Locale-aware currency formatting — renders "€0.10" not "0.10 EUR"
-  const currencyFormatter = new Intl.NumberFormat(
-    document.documentElement.lang || undefined,
-    { style: "currency", currency: shopCurrency },
-  );
-  const depositText = `${currencyFormatter.format(Number(config.depositAmount) || 0)} per bottle`;
+  // Locale-aware currency formatting — renders "€0.10" not "0.10 EUR".
+  // Intl throws on an unknown locale/currency; fall back to plain text
+  // so a bad value can't abort the script before markReady().
+  const depositNumber = Number(config.depositAmount) || 0;
+  let depositPrice;
+  try {
+    depositPrice = new Intl.NumberFormat(
+      document.documentElement.lang || undefined,
+      { style: "currency", currency: shopCurrency },
+    ).format(depositNumber);
+  } catch (e) {
+    depositPrice = `${depositNumber.toFixed(2)} ${shopCurrency}`;
+  }
+  const depositText = `${depositPrice} per bottle`;
 
   const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
 

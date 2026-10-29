@@ -42,7 +42,8 @@ const depositLine = (quantity) => ({
   },
 });
 
-const input = (lines, cfg = config()) => ({
+const input = (lines, cfg = config(), step = "CHECKOUT_COMPLETION") => ({
+  buyerJourney: { step },
   cart: { lines },
   validation: { metafield: { value: cfg } },
 });
@@ -93,6 +94,27 @@ describe("Deposit validation", () => {
   test("no-ops when mode is expand", () => {
     const result = cartValidationsGenerateRun(
       input([productLine(1, 2)], config({ mode: "expand" })),
+    );
+    expect(result.operations).toEqual([]);
+  });
+
+  test("never blocks cart interactions (would deadlock cart mutations)", () => {
+    const result = cartValidationsGenerateRun(
+      input([productLine(1, 2)], config(), "CART_INTERACTION"),
+    );
+    expect(result.operations).toEqual([]);
+  });
+
+  test("blocks a missing deposit during checkout interaction", () => {
+    const result = cartValidationsGenerateRun(
+      input([productLine(1, 2)], config(), "CHECKOUT_INTERACTION"),
+    );
+    expect(result.operations[0].validationAdd.errors.length).toBe(1);
+  });
+
+  test("no-ops when the buyer journey step is unknown", () => {
+    const result = cartValidationsGenerateRun(
+      input([productLine(1, 2)], config(), null),
     );
     expect(result.operations).toEqual([]);
   });
