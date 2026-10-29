@@ -6,7 +6,7 @@
   "scripts": {
     "build": "remix vite:build",
     "dev": "remix vite:dev",
-    "start": "cross-env NODE_ENV=production remix-serve ./build/server/index.js",
+    "start": "prisma migrate deploy && cross-env NODE_ENV=production remix-serve ./build/server/index.js",
     "typecheck": "tsc --noEmit",
     "shopify:dev": "shopify app dev",
     "shopify:deploy": "shopify app deploy",
