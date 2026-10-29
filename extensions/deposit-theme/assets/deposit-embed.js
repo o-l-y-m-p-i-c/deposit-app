@@ -2,7 +2,10 @@
  * Deposit Price Display — Storefront Script
  *
  * 1. Appends "+ 0.10 EUR per bottle" text on eligible product prices
- *    (product pages, product cards).
+ *    (product pages, product cards) on any theme — price elements are
+ *    found by their content (currency + the product's own price), not
+ *    by theme-specific classes. Optional selector override in the
+ *    app embed settings.
  *
  * 2. Manages deposit as real cart lines ("line" mode):
  *    - Auto-adds a deposit line per eligible variant, tagged with a
@@ -54,20 +57,61 @@
     config.currencyCode ||
     "EUR";
 
+  // The deposit is configured in the shop currency; convert it to the
+  // presentment currency the customer browses in (Shopify applies the
+  // same rate to the deposit cart line)
+  const currencyRate = Number(window.Shopify?.currency?.rate) || 1;
+  const depositNumber =
+    Math.round((Number(config.depositAmount) || 0) * currencyRate * 100) / 100;
+
   // Locale-aware currency formatting — renders "€0.10" not "0.10 EUR".
   // Intl throws on an unknown locale/currency; fall back to plain text
   // so a bad value can't abort the script before markReady().
-  const depositNumber = Number(config.depositAmount) || 0;
   let depositPrice;
+  let currencySymbols = [];
   try {
-    depositPrice = new Intl.NumberFormat(
+    const fmt = new Intl.NumberFormat(
       document.documentElement.lang || undefined,
       { style: "currency", currency: shopCurrency },
-    ).format(depositNumber);
+    );
+    depositPrice = fmt.format(depositNumber);
+    currencySymbols = fmt
+      .formatToParts(1)
+      .filter((p) => p.type === "currency")
+      .map((p) => p.value);
   } catch (e) {
     depositPrice = `${depositNumber.toFixed(2)} ${shopCurrency}`;
   }
   const depositText = `${depositPrice} per bottle`;
+
+  // Theme-agnostic price detection: a price element is one whose text
+  // carries a currency marker and whose digits equal one of the
+  // product's variant prices. Markers come from the shop's Liquid money
+  // formats (the exact strings themes render) plus Intl symbols.
+  const themeSettingsScript = document.getElementById("deposit-theme-settings");
+  let themeSettings = { moneyFormats: [], priceSelector: "" };
+  if (themeSettingsScript) {
+    try {
+      themeSettings = Object.assign(themeSettings, JSON.parse(themeSettingsScript.textContent));
+    } catch (e) {}
+  }
+  const currencyMarkers = [
+    ...new Set(
+      [
+        ...(themeSettings.moneyFormats || []).map((f) =>
+          String(f || "")
+            .replace(/<[^>]*>/g, "")
+            .replace(/\{\{[^}]*\}\}/g, " "),
+        ),
+        ...currencySymbols,
+        shopCurrency,
+      ]
+        .flatMap((s) => s.split(/\s+/))
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const priceSelector = String(themeSettings.priceSelector || "").trim();
 
   const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
 
@@ -78,6 +122,8 @@
 
   // Cache of product handle -> tags
   const tagCache = new Map();
+  // Cache of product handle -> Promise<product JSON | null>
+  const productCache = new Map();
   // Cache of collection handle -> Promise<Set<productHandle>>
   const collectionCache = new Map();
   // Handle of the deposit product (read from cart, for row detection)
@@ -166,31 +212,40 @@
   }
 
   /**
-   * Fetch product tags for a handle (cached).
-   * Throws on transient failures — the caller must decide whether a
-   * missing eligibility signal is safe to act on.
+   * Fetch a product's storefront JSON (cached per handle). Resolves
+   * null for 404. Throws on transient failures — the caller must decide
+   * whether a missing eligibility signal is safe to act on.
    */
+  function getProduct(handle) {
+    if (productCache.has(handle)) return productCache.get(handle);
+    const promise = (async () => {
+      const res = await nativeFetch(`/products/${handle}.js`);
+      if (!res.ok) {
+        if (res.status === 404) return null;
+        throw new Error(`product fetch ${res.status}`);
+      }
+      const product = await res.json();
+      // Seed stock too — same fetch, needed for over-stock bundling checks
+      (product.variants || []).forEach((v) =>
+        variantStock.set(Number(v.id), {
+          tracked: v.inventory_management === "shopify",
+          quantity: v.inventory_quantity,
+          policy: v.inventory_policy,
+        }),
+      );
+      return product;
+    })();
+    promise.catch(() => productCache.delete(handle));
+    productCache.set(handle, promise);
+    return promise;
+  }
+
+  /** Product tags for a handle (cached). Throws like getProduct. */
   async function getProductTags(handle) {
     if (tagCache.has(handle)) return tagCache.get(handle);
-    const res = await nativeFetch(`/products/${handle}.js`);
-    if (!res.ok) {
-      if (res.status === 404) {
-        tagCache.set(handle, []);
-        return [];
-      }
-      throw new Error(`product fetch ${res.status}`);
-    }
-    const product = await res.json();
-    const tags = product.tags || [];
+    const product = await getProduct(handle);
+    const tags = product?.tags || [];
     tagCache.set(handle, tags);
-    // Seed stock too — same fetch, needed for over-stock bundling checks
-    (product.variants || []).forEach((v) =>
-      variantStock.set(Number(v.id), {
-        tracked: v.inventory_management === "shopify",
-        quantity: v.inventory_quantity,
-        policy: v.inventory_policy,
-      }),
-    );
     return tags;
   }
 
@@ -251,112 +306,200 @@
     return !excluded;
   }
 
+  // ------------------------------------------------------------------
+  // Price labels — theme-agnostic
+  // ------------------------------------------------------------------
+  // Instead of theme-specific classes, a price element is found by its
+  // content: the deepest visible element whose text carries a currency
+  // marker and whose digits equal one of the product's variant prices.
+  // That works the same on Dawn, Horizon and third-party themes, and
+  // skips struck-through compare-at prices on its own (different value).
+  // Merchants can pin an exact selector in the app embed settings.
+
+  // Never label prices inside these
+  const PRICE_SKIP =
+    "s, del, strike, button, option, select, script, style, template, " +
+    ".deposit-price-text, [class*='compare' i]";
+
+  // Areas that list cart lines or navigation, not product cards
+  const CARD_SKIP =
+    "header, nav, footer, cart-drawer, cart-drawer-items, cart-items, " +
+    'cart-notification, form[action$="/cart"], [id*="CartDrawer"]';
+
+  /** Rendered and larger than a visually-hidden 1px clip. */
+  function isVisible(el) {
+    return [...el.getClientRects()].some((r) => r.width > 1 && r.height > 1);
+  }
+
+  function handleFromHref(href) {
+    const m = String(href || "").match(/\/products\/([^/?#]+)/);
+    if (!m) return null;
+    try {
+      return decodeURIComponent(m[1]);
+    } catch (e) {
+      return m[1];
+    }
+  }
+
+  /** Variant prices of a product (minor units, presentment currency). */
+  function productPrices(product) {
+    const prices = new Set();
+    if (Number.isFinite(product?.price)) prices.add(product.price);
+    for (const v of product?.variants || []) {
+      if (Number.isFinite(v.price)) prices.add(v.price);
+    }
+    return prices;
+  }
+
+  /** Does this text read as one of the given prices? */
+  function textMatchesPrice(text, prices) {
+    if (!text || text.length > 60) return false;
+    if (!currencyMarkers.some((m) => text.includes(m))) return false;
+    const digits = text.replace(/\D/g, "");
+    if (!digits) return false;
+    const n = Number(digits);
+    for (const p of prices) {
+      if (n === p) return true; // "€2,50" / "2.50 EUR" / "€0.05"
+      if (p % 100 === 0 && n === p / 100) return true; // "€3" (no decimals)
+    }
+    return false;
+  }
+
+  /** Visible price elements for the given prices inside a container. */
+  function findPriceElements(container, prices) {
+    if (priceSelector) {
+      let els = [];
+      try {
+        els = [...container.querySelectorAll(priceSelector)];
+      } catch (e) {
+        // Invalid selector from settings — fall back to detection
+      }
+      if (els.length > 0) {
+        return els.filter((el) => !el.closest(PRICE_SKIP) && isVisible(el));
+      }
+    }
+    const matches = [];
+    for (const el of container.querySelectorAll("*")) {
+      const text = el.textContent;
+      if (!text || text.length > 120) continue; // cheap prefilter
+      if (!textMatchesPrice(text.trim(), prices)) continue;
+      if (el.closest(PRICE_SKIP)) continue;
+      matches.push(el);
+    }
+    // Deepest only: a wrapper whose text is the same price is skipped
+    return matches.filter(
+      (el) => !matches.some((o) => o !== el && el.contains(o)) && isVisible(el),
+    );
+  }
+
+  /** Already labelled (our label sits right after the price). */
+  function hasLabel(el) {
+    return !!el.nextElementSibling?.classList.contains("deposit-price-text");
+  }
+
   /**
-   * Append deposit text after a price element (product page & cards).
+   * Insert the deposit text right after a price element. A sibling (not
+   * a child) survives themes and currency apps that rewrite the price
+   * element's own text.
    */
   function appendDepositText(priceElement) {
-    if (!priceElement || priceElement.dataset.depositAdded) return;
+    if (!priceElement || hasLabel(priceElement)) return;
 
     const depositSpan = document.createElement("span");
     depositSpan.className = "deposit-price-text";
+    depositSpan.dataset.depositLabel = "true";
     depositSpan.style.cssText =
       "font-size: 0.85em; color: #666; margin-left: 4px; display: inline;";
-    depositSpan.textContent = " + " + depositText;
+    depositSpan.textContent = "+ " + depositText;
 
-    priceElement.appendChild(depositSpan);
-    priceElement.dataset.depositAdded = "true";
+    priceElement.after(depositSpan);
+  }
+
+  /** The section holding the main product form on a product page. */
+  function productPageContainer() {
+    const form =
+      document.querySelector('main form[action*="/cart/add"]') ||
+      document.querySelector('form[action*="/cart/add"]');
+    return (
+      form?.closest(".shopify-section, section") ||
+      document.querySelector("main") ||
+      document.body
+    );
   }
 
   /**
-   * Find the visible price element(s) within a price container.
-   * When a product is on sale, Dawn hides .price__regular and shows .price__sale.
-   * We must only annotate the visible price element.
+   * Label the main product price on a product page.
+   * Returns the product section (so cards skip it), or null elsewhere.
    */
-  function findVisiblePriceElements(container) {
-    // Check if this price container is on sale
-    const priceWrapper = container.closest(".price");
-    if (priceWrapper && priceWrapper.classList.contains("price--on-sale")) {
-      // On sale: only target the sale price element (the last one, not the strikethrough)
-      return container.querySelectorAll(".price__sale .price-item--sale");
-    }
-    // Not on sale: target the regular price element
-    return container.querySelectorAll(".price__regular .price-item--regular");
-  }
+  async function updateProductPage() {
+    const handle = handleFromHref(window.location.pathname);
+    if (!handle) return null;
+    const container = productPageContainer();
 
-  /**
-   * Update prices on a product page.
-   */
-  function updateProductPage() {
+    // Seed the tag cache so eligibility skips one product fetch
     const tagsScript = document.getElementById("deposit-product-tags");
-    if (!tagsScript) return;
-
-    let productTags;
-    try {
-      productTags = JSON.parse(tagsScript.textContent);
-    } catch (e) {
-      return;
+    if (tagsScript && !tagCache.has(handle)) {
+      try {
+        tagCache.set(handle, JSON.parse(tagsScript.textContent));
+      } catch (e) {}
     }
 
-    // Seed the tag cache so the first cart sync skips the
-    // /products/{handle}.js fetch for this product
-    const handleMatch = window.location.pathname.match(/\/products\/([^/?#]+)/);
-    if (handleMatch) tagCache.set(handleMatch[1], productTags);
+    // The merchant placed the Liquid "Deposit Price" block — don't double up
+    if (container.querySelector("[data-deposit-block]")) return container;
 
-    const { included, excluded } = isEligibleTags(productTags);
-    if (!included || excluded) return;
+    try {
+      const product = await getProduct(handle);
+      if (!product || !(await isEligibleItem({ handle }))) return container;
+      findPriceElements(container, productPrices(product)).forEach(appendDepositText);
+    } catch (e) {
+      // Transient fetch failure — the next pass retries
+    }
+    return container;
+  }
 
-    // Find all price containers on the page and annotate visible price elements
-    document
-      .querySelectorAll(".price, .product__price, .product-single__price")
-      .forEach((priceContainer) => {
-        findVisiblePriceElements(priceContainer).forEach(appendDepositText);
-      });
+  /** Widest ancestor of a product link that still holds only that product. */
+  function cardFor(link, handle) {
+    let card = null;
+    let el = link.parentElement;
+    for (let i = 0; el && el !== document.body && i < 10; i++) {
+      const other = [...el.querySelectorAll('a[href*="/products/"]')].some(
+        (a) => handleFromHref(a.getAttribute("href")) !== handle,
+      );
+      if (other) break;
+      card = el;
+      el = el.parentElement;
+    }
+    return card;
   }
 
   /**
-   * Update prices on product cards (collection/search pages).
+   * Label prices on product cards anywhere on the page (collections,
+   * search, recommendations, featured products) — any theme.
    */
-  function updateProductCards() {
-    const cardLinks = document.querySelectorAll('a[href*="/products/"]');
-    const cardsToUpdate = [];
-
-    cardLinks.forEach((link) => {
-      const href = link.getAttribute("href");
-      const match = href.match(/\/products\/([^/?#]+)/);
-      if (!match) return;
-      const handle = match[1];
-
-      const card = link.closest(
-        ".card, .product-card, .grid__item, .collection-list__item, li",
-      );
-      if (!card) return;
-
-      // Find the price container within this card
-      const priceContainer = card.querySelector(".price");
-      if (!priceContainer) return;
-
-      // Find the visible price element (sale or regular, not both)
-      const priceEls = findVisiblePriceElements(priceContainer);
-      const priceEl = priceEls.length > 0 ? priceEls[0] : null;
-      if (!priceEl || priceEl.dataset.depositAdded) return;
-
-      cardsToUpdate.push({ priceEl, handle });
+  function updateProductCards(excludeContainer) {
+    const byHandle = new Map(); // handle -> Set<card>
+    document.querySelectorAll('a[href*="/products/"]').forEach((link) => {
+      const handle = handleFromHref(link.getAttribute("href"));
+      if (!handle || link.closest(CARD_SKIP)) return;
+      if (excludeContainer && excludeContainer.contains(link)) return;
+      const card = cardFor(link, handle);
+      if (!card || card.querySelector(".deposit-price-text")) return;
+      if (!byHandle.has(handle)) byHandle.set(handle, new Set());
+      byHandle.get(handle).add(card);
     });
 
-    const handles = [...new Set(cardsToUpdate.map((c) => c.handle))];
-
-    handles.forEach(async (handle) => {
-      let tags;
+    byHandle.forEach(async (cards, handle) => {
       try {
-        tags = await getProductTags(handle);
+        const product = await getProduct(handle);
+        if (!product || !(await isEligibleItem({ handle }))) return;
+        const prices = productPrices(product);
+        cards.forEach((card) => {
+          const [priceEl] = findPriceElements(card, prices);
+          if (priceEl) appendDepositText(priceEl);
+        });
       } catch (e) {
-        return;
+        // Transient fetch failure — the next pass retries
       }
-      const { included, excluded } = isEligibleTags(tags);
-      if (!included || excluded) return;
-      cardsToUpdate
-        .filter((c) => c.handle === handle)
-        .forEach((c) => appendDepositText(c.priceEl));
     });
   }
 
@@ -435,22 +578,15 @@
    * add-to-cart can be bundled immediately without extra fetches.
    */
   async function seedProductEligibility() {
-    const m = window.location.pathname.match(/\/products\/([^/?#]+)/);
-    if (!m) return;
+    const handle = handleFromHref(window.location.pathname);
+    if (!handle) return;
     try {
-      const res = await nativeFetch(`/products/${m[1]}.js`);
-      if (!res.ok) return;
-      const product = await res.json();
-      const handle = m[1];
-      tagCache.set(handle, product.tags || []);
+      // Shared cached fetch — also seeds variantStock
+      const product = await getProduct(handle);
+      if (!product) return;
       const eligible = await isEligibleItem({ handle });
       (product.variants || []).forEach((v) => {
         variantEligible.set(Number(v.id), eligible);
-        variantStock.set(Number(v.id), {
-          tracked: v.inventory_management === "shopify",
-          quantity: v.inventory_quantity,
-          policy: v.inventory_policy,
-        });
       });
     } catch (e) {}
   }
@@ -879,21 +1015,16 @@
     isUpdating = true;
 
     try {
-      const pageType = window.Shopify?.Analytics?.meta?.page?.pageType
-        || document.body.dataset.template
-        || "";
-
-      if (pageType === "product" || document.getElementById("deposit-product-tags")) {
-        updateProductPage();
-      }
+      // Product page label runs alongside the cart sync so its product
+      // fetch never delays lifting the cart loading state
+      const productPage = updateProductPage();
 
       // Sync deposit lines + re-lock controls (async)
       await syncDepositLine(cartOverride);
 
-      // Product cards on collection/search pages
-      if (pageType !== "product") {
-        updateProductCards();
-      }
+      // Product cards on every page type (collections, search, product
+      // recommendations, featured products) — minus the main product
+      updateProductCards(await productPage);
     } finally {
       // Release the guard; if mutations arrived while we were working,
       // run once more so no cart change is ever missed
@@ -951,6 +1082,7 @@
         (n) =>
           n.nodeType === 1 &&
           (n.dataset?.depositLine === "true" ||
+            n.dataset?.depositLabel === "true" ||
             n.classList?.contains("deposit-qty-static") ||
             n.id === "deposit-lock-styles"),
       );

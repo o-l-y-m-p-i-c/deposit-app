@@ -6,6 +6,16 @@
 
 {%- assign deposit_config = app.metafields["$app:deposit"]["display-config"].value -%}
 <script id="deposit-config" type="application/json">{{ deposit_config | json }}</script>
+{%- comment -%}
+  Money formats tell deposit-embed.js which currency markers the theme
+  renders next to prices; price_selector optionally pins the element.
+{%- endcomment -%}
+<script id="deposit-theme-settings" type="application/json">
+  {
+    "moneyFormats": [{{ shop.money_format | json }}, {{ shop.money_with_currency_format | json }}],
+    "priceSelector": {{ block.settings.price_selector | default: "" | json }}
+  }
+</script>
 
 {%- if deposit_config.enabled and deposit_config.depositVariantId -%}
 {%- comment -%}
@@ -75,6 +85,13 @@
 {
   "name": "Deposit Price Display",
   "target": "body",
-  "settings": []
+  "settings": [
+    {
+      "type": "text",
+      "id": "price_selector",
+      "label": "Price element selector (optional)",
+      "info": "Leave empty — prices are detected automatically on any theme. Set a CSS selector (e.g. .price-item--sale, .money) only if the deposit text appears in the wrong place."
+    }
+  ]
 }
 {% endschema %}
