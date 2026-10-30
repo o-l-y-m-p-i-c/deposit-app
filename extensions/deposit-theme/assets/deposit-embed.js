@@ -1266,8 +1266,8 @@
   /**
    * Make the theme show the cart after our own writes: theme events first
    * (Dawn pubsub, Horizon cart:update, common cart:* events); if the
-   * visible cart still doesn't match shortly after, re-render sections;
-   * as a last resort reload the cart page.
+   * visible cart still doesn't match shortly after, re-render the cart
+   * sections in place. Never reloads the page.
    */
   function refreshCartUi(cartData) {
     try {
@@ -1285,33 +1285,15 @@
       } catch (e) {}
     }
 
-    const storage = (fn) => {
-      try {
-        return fn(window.sessionStorage);
-      } catch (e) {
-        return null;
-      }
-    };
     clearTimeout(redrawTimer);
     redrawTimer = setTimeout(async () => {
-      if (!cartData?.items) return;
-      if (cartUiMatches(cartData)) {
-        storage((s) => s.removeItem("deposit-cart-reloaded"));
-        return;
-      }
+      if (!cartData?.items || cartUiMatches(cartData)) return;
       try {
         if (await rerenderCartSections()) {
           lockDepositRows();
           patchCartCount();
-          if (cartUiMatches(cartData)) return;
         }
       } catch (e) {}
-      // Classic cart pages without an Ajax cart: reload once
-      const onCartPage = /\/cart\/?$/.test(window.location.pathname);
-      if (onCartPage && !storage((s) => s.getItem("deposit-cart-reloaded"))) {
-        storage((s) => s.setItem("deposit-cart-reloaded", "1"));
-        window.location.reload();
-      }
     }, 700);
   }
 
