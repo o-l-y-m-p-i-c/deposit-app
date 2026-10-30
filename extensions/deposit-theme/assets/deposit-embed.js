@@ -579,25 +579,6 @@
   }
 
   /**
-   * Re-render cart UI after a programmatic cart change.
-   * Dawn listens to PUB_SUB_EVENTS.cartUpdate; other themes use DOM events.
-   */
-  function refreshCartUi(cartData) {
-    try {
-      // PUB_SUB_EVENTS is script-scoped in Dawn — not on window — so
-      // fall back to the literal event name "cart-update"
-      const evt = window.PUB_SUB_EVENTS?.cartUpdate || "cart-update";
-      if (typeof window.publish === "function" && cartData?.sections) {
-        window.publish(evt, { source: "deposit-sync", cartData });
-      }
-    } catch (e) {
-      // Not a pubsub theme — fall through to DOM events
-    }
-    document.dispatchEvent(new CustomEvent("cart:updated", { detail: { cart: cartData } }));
-    document.dispatchEvent(new CustomEvent("cart:refresh"));
-  }
-
-  /**
    * Resolve and cache a variant's deposit units (per product — all
    * variants of a product share them). Throws on transient failures.
    */
@@ -976,129 +957,362 @@
     }
   }
 
-  /**
-   * Inject the CSS that hides interactive controls on the deposit row.
-   */
+  // ------------------------------------------------------------------
+  // Cart UI — theme-agnostic (row locking, count, redraw)
+  // ------------------------------------------------------------------
+  // Nothing here depends on a theme's classes. Every theme links a cart
+  // line to its product (item.url = /products/<handle>?variant=<id>), so a
+  // deposit row is the area around that link which holds no other
+  // product's link. Its quantity/remove controls are recognised by
+  // generic traits (number inputs, updates[...] names, /cart/change
+  // links, "quantity"/"remove" in names, classes or labels).
+
+  // Controls to hide inside a deposit row
+  const CONTROL_SELECTOR = [
+    'input[type="number"]',
+    'input[name^="updates"]',
+    'input[name="quantity"]',
+    'select[name^="updates"]',
+    '[name="plus"]',
+    '[name="minus"]',
+    'a[href*="/cart/change"]',
+    'a[href*="quantity=0"]',
+    "quantity-input",
+    "quantity-popover",
+    "quantity-selector-component",
+    "cart-remove-button",
+    "cart-remove",
+    '[class*="quantity" i]',
+    '[class*="qty" i]',
+    '[class*="remove" i]',
+    '[class*="delete" i]',
+    '[data-action*="remove" i]',
+    '[data-action*="quantity" i]',
+    'button[aria-label*="remove" i]',
+    'button[aria-label*="delete" i]',
+    'button[aria-label*="quantity" i]',
+    'button[aria-label*="increase" i]',
+    'button[aria-label*="decrease" i]',
+  ].join(",");
+
+  // Cart count badges (header icon, drawer title)
+  const COUNT_SELECTOR = [
+    ".cart-count-bubble",
+    "cart-count",
+    "[data-cart-count]",
+    '[class*="cart-count" i]',
+    '[class*="cart_count" i]',
+    '[class*="cartcount" i]',
+    '[class*="cart-badge" i]',
+    '[class*="count-bubble" i]',
+    '[class*="cart-items-count" i]',
+    '[id*="cart-count" i]',
+    '[id*="CartCount" i]',
+  ].join(",");
+
   function injectLockStyles() {
     if (document.getElementById("deposit-lock-styles")) return;
     const style = document.createElement("style");
     style.id = "deposit-lock-styles";
-    // Variant-keyed selectors hide the controls before JS ever runs on
-    // the row — no flash even when the theme re-renders the section.
-    // Sibling selectors (~) cover browsers without :has() support.
     style.textContent = `
-      .cart-item:has([data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) :is(quantity-popover, quantity-input, cart-remove-button, .quantity-popover-container),
-      .deposit-line-locked quantity-input,
-      .deposit-line-locked quantity-popover,
-      .deposit-line-locked quantity-popover-container,
-      .deposit-line-locked .quantity-popover-container,
-      .deposit-line-locked cart-remove-button,
-      .deposit-line-locked .cart-item__quantity-wrapper,
-      .deposit-line-locked .cart-item__remove,
-      .deposit-line-locked .quantity { display: none !important; }
+      .deposit-control-hidden { display: none !important; }
+      .deposit-qty-static { font-size: 0.9em; color: #666; }
     `;
     document.head.appendChild(style);
   }
 
+  /** Product variant a link points to (?variant=<id>), else null. */
+  function linkVariant(a) {
+    const m = (a.getAttribute("href") || "").match(/[?&]variant=(\d+)/);
+    return m ? Number(m[1]) : null;
+  }
+
+  // Cart drawers, cart pages, cart popups — where handle-only links count
+  const CART_CONTEXT =
+    'form[action*="/cart"], cart-drawer, cart-items, cart-drawer-items, [id*="cart" i], [class*="cart" i]';
+
   /**
-   * Lock a single deposit cart row: hide qty input + remove button,
-   * show the quantity as static text.
+   * Links that render a cart line: ?variant=<id> links (item.url, most
+   * themes), else links to its product inside a cart area.
    */
-  function lockRow(row) {
-    if (!row) return;
-    if (row.dataset.depositLocked !== "true") {
-      row.dataset.depositLocked = "true";
-      row.classList.add("deposit-line-locked");
-
-      const qtyInput = row.querySelector(
-        "input[name='updates[]'], input[data-quantity-line-key]",
-      );
-      const qty = qtyInput?.value || "";
-
-      // The quantity control itself is CSS-hidden — put the static qty
-      // text into the cell that wraps the hidden popover (the popover's
-      // parent stays visible in both cart-page <td> and drawer markup;
-      // note quantity-popover-container is a class, not an element)
-      const qtyCell =
-        row.querySelector("quantity-popover")?.parentElement ||
-        row.querySelector(".cart-item__quantity") ||
-        row.querySelector(".quantity-popover-container")?.parentElement ||
-        qtyInput?.closest("td");
-      if (qtyCell && !qtyCell.querySelector(".deposit-qty-static")) {
-        const span = document.createElement("span");
-        span.className = "deposit-qty-static";
-        span.style.cssText = "font-size: 0.9em; color: #666;";
-        span.textContent = qty;
-        qtyCell.appendChild(span);
-      }
-    }
+  function lineLinks(item) {
+    const byVariant = [...document.querySelectorAll(`a[href*="variant=${item.variant_id}"]`)].filter(
+      (a) => linkVariant(a) === item.variant_id,
+    );
+    if (byVariant.length > 0 || !item.handle) return byVariant;
+    return [...document.querySelectorAll(`a[href*="/products/${item.handle}"]`)].filter(
+      (a) => handleFromHref(a.getAttribute("href")) === item.handle && a.closest(CART_CONTEXT),
+    );
   }
 
   /**
-   * Rewrite the cart-count bubble to exclude deposit quantities.
-   * Runs synchronously in the observer (before paint) so the number
-   * never visibly flips — same trick as the row locking.
+   * The rendered row of one cart line, found from its product link:
+   * the widest ancestor that holds no link to another cart line.
+   */
+  function rowForLink(link) {
+    const ownHandle = handleFromHref(link.getAttribute("href"));
+    const ownVariant = linkVariant(link);
+    let row = null;
+    let el = link.parentElement;
+    for (let i = 0; el && el !== document.body && i < 12; i++) {
+      const foreign = [...el.querySelectorAll('a[href*="/products/"]')].some((a) => {
+        if (handleFromHref(a.getAttribute("href")) !== ownHandle) return true;
+        const v = linkVariant(a);
+        return v !== null && ownVariant !== null && v !== ownVariant;
+      });
+      if (foreign) break;
+      row = el;
+      el = el.parentElement;
+    }
+    return row;
+  }
+
+  /** Rendered rows of deposit lines (cart page, drawer, popups). */
+  function findDepositRows() {
+    const rows = new Set();
+    const lines = (lastCart?.items || []).filter(isDepositLine);
+    // Before the first cart read: the deposit variants we already know
+    const known = lines.length > 0 ? lines : [...depositVariantIds].map((v) => ({ variant_id: v }));
+    for (const line of known) {
+      for (const a of lineLinks(line)) {
+        const row = rowForLink(a);
+        if (row) rows.add(row);
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * Lock one deposit row: hide its quantity/remove controls (never the
+   * title, image or price) and show the quantity as plain text.
+   */
+  function lockRow(row, quantity) {
+    const matches = [...row.querySelectorAll(CONTROL_SELECTOR)].filter(
+      (el) =>
+        !el.classList.contains("deposit-qty-static") &&
+        !el.querySelector('a[href*="/products/"], img') &&
+        !el.matches('a[href*="/products/"]'),
+    );
+    // Outermost controls only — hiding those hides the rest
+    const outer = matches.filter((el) => !matches.some((o) => o !== el && o.contains(el)));
+    outer.forEach((el) => el.classList.add("deposit-control-hidden"));
+    row.dataset.depositLocked = "true";
+
+    if (quantity == null) return;
+    const existing = row.querySelector(".deposit-qty-static");
+    if (existing) {
+      if (existing.textContent !== String(quantity)) existing.textContent = String(quantity);
+      return;
+    }
+    // Plain quantity where the hidden quantity control was
+    const anchor =
+      outer.find((el) => el.matches('input, quantity-input, quantity-selector-component, [class*="quantity" i], [class*="qty" i]')) ||
+      outer[0];
+    if (!anchor?.parentElement) return;
+    const span = document.createElement("span");
+    span.className = "deposit-qty-static";
+    span.textContent = String(quantity);
+    anchor.parentElement.insertBefore(span, anchor);
+  }
+
+  /** Find and lock every deposit row. Runs before paint via the observer. */
+  function lockDepositRows() {
+    if (!DEPOSIT_VARIANT_ID && depositVariantIds.size === 0) return;
+    injectLockStyles();
+    const qtyByVariant = new Map();
+    for (const i of lastCart?.items || []) {
+      if (isDepositLine(i)) qtyByVariant.set(i.variant_id, (qtyByVariant.get(i.variant_id) || 0) + i.quantity);
+    }
+    for (const row of findDepositRows()) {
+      const a = row.querySelector('a[href*="/products/"]');
+      const vid = a ? linkVariant(a) : null;
+      // Shared deposit spans several lines; show the row's own input value
+      const input = row.querySelector('input[type="number"], input[name^="updates"]');
+      const qty = input?.value || (vid !== null ? qtyByVariant.get(vid) : null);
+      lockRow(row, qty);
+    }
+  }
+
+  /** Total and deposit-free item counts of the last known cart. */
+  function cartCounts() {
+    let total = 0;
+    let withoutDeposits = 0;
+    for (const i of lastCart?.items || []) {
+      total += i.quantity;
+      if (!isDepositLine(i)) withoutDeposits += i.quantity;
+    }
+    return { total, withoutDeposits };
+  }
+
+  // Where cart counts live: badges, cart links/buttons, cart drawers and
+  // pages ("Cart (4)", "4 items", aria-labels) — by meaning, not by theme
+  const COUNT_SCOPE = `${COUNT_SELECTOR}, a[href$="/cart"], a[href*="/cart?"], [aria-label*="cart" i], [id*="cart" i], [class*="cart" i]`;
+
+  /**
+   * Rewrite cart counts that include deposits ("4" → "2", "Cart (4)" →
+   * "Cart (2)", "4 items" → "2 items"), wherever the theme shows them.
+   * Numbers inside cart line rows (quantities, prices) are never touched.
+   * Edits text nodes in place (characterData — the observer doesn't
+   * watch it, so no loop).
    */
   function patchCartCount() {
     if (!lastCart) return;
-    const count = (lastCart.items || []).reduce(
-      (s, i) => (isDepositLine(i) ? s : s + i.quantity),
-      0,
-    );
-    document.querySelectorAll(".cart-count-bubble").forEach((b) => {
-      const num = b.querySelector("span[aria-hidden]");
-      const label = b.querySelector(".visually-hidden");
-      // Only write when different — every write is a DOM mutation
-      // that re-triggers the observer (infinite loop otherwise)
-      if (num && num.textContent.trim() !== String(count)) {
-        num.textContent = String(count);
+    const { total, withoutDeposits } = cartCounts();
+    if (total === withoutDeposits) return;
+
+    const lineRows = new Set();
+    for (const item of lastCart.items || []) {
+      for (const a of lineLinks(item)) {
+        const row = rowForLink(a);
+        if (row) lineRows.add(row);
       }
-      const labelText = `${count} item${count === 1 ? "" : "s"}`;
-      if (label && label.textContent !== labelText) {
-        label.textContent = labelText;
+    }
+    const inLineRow = (el) => [...lineRows].some((row) => row.contains(el));
+    const pattern = /^(\D*)(\d+)(\D*)$/;
+    const seen = new Set();
+
+    document.querySelectorAll(COUNT_SCOPE).forEach((scope) => {
+      // Skip page-level wrappers (body.template-cart, main cart sections
+      // are walked through their smaller cart-named descendants)
+      if (scope === document.body || scope === document.documentElement) return;
+      if ((scope.textContent || "").length > 3000) return;
+
+      const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (seen.has(node)) continue;
+        seen.add(node);
+        const parent = node.parentElement;
+        if (!parent || parent.closest("script, style, .deposit-qty-static, .deposit-price-text")) continue;
+        const m = (node.nodeValue || "").match(pattern);
+        if (!m || Number(m[2]) !== total || inLineRow(parent)) continue;
+        node.nodeValue = `${m[1]}${withoutDeposits}${m[3]}`;
+        if (withoutDeposits === 0 && parent.closest(COUNT_SELECTOR)) {
+          parent.closest(COUNT_SELECTOR).classList.add("deposit-control-hidden");
+        }
       }
-      const wantDisplay = count === 0 ? "none" : "";
-      if (b.style.display !== wantDisplay) {
-        b.style.display = wantDisplay;
+      for (const attr of ["data-cart-count", "data-count", "aria-label"]) {
+        const v = scope.getAttribute(attr);
+        if (v && new RegExp(`(^|\\D)${total}(\\D|$)`).test(v) && !inLineRow(scope)) {
+          scope.setAttribute(attr, v.replace(new RegExp(`(^|\\D)${total}(\\D|$)`), `$1${withoutDeposits}$2`));
+        }
       }
     });
   }
 
   /**
-   * Find the deposit row in the rendered cart (page + drawer) and lock it.
-   * Dawn quantity inputs carry data-quantity-line-key="{variantId}:{hash}".
-   * Fallback: match the product link href to the deposit handle.
+   * Does the visible cart match the cart we just wrote? Every deposit
+   * line needs a row, and visible quantity inputs must match.
    */
-  function lockDepositRows() {
-    if (!DEPOSIT_VARIANT_ID) return;
-    injectLockStyles();
-
-    const rows = new Set();
-
-    document
-      .querySelectorAll("[data-quantity-line-key]")
-      .forEach((el) => {
-        // Line keys are "{variantId}:{hash}"
-        const key = el.getAttribute("data-quantity-line-key") || "";
-        if (!depositVariantIds.has(Number(key.split(":")[0]))) return;
-        const row = el.closest(
-          "tr.cart-item, .cart-item, .cart-drawer-item, tr, li",
-        );
-        if (row) rows.add(row);
+  function cartUiMatches(cart) {
+    for (const item of cart.items || []) {
+      const links = lineLinks(item);
+      if (links.length === 0) return false;
+      if (!isDepositLine(item)) continue;
+      // Deposit quantity: our static text, or a hidden input's value
+      const rows = links.map((a) => rowForLink(a)).filter(Boolean);
+      const shown = rows.some((row) => {
+        const text = row.querySelector(".deposit-qty-static")?.textContent;
+        const input = row.querySelector('input[type="number"], input[name^="updates"]');
+        return String(item.quantity) === (input?.value ?? text);
       });
+      if (!shown) return false;
+    }
+    return true;
+  }
 
-    for (const handle of depositHandles) {
-      document
-        .querySelectorAll(`a[href*="/products/${handle}"]`)
-        .forEach((a) => {
-          const row = a.closest(
-            "tr.cart-item, .cart-item, .cart-drawer-item",
-          );
-          if (row) rows.add(row);
-        });
+  /**
+   * Re-render cart sections with Shopify's Section Rendering API — works
+   * on any Online Store 2.0 theme. Only the part holding cart rows (and
+   * count badges) is swapped, so an open drawer stays open.
+   */
+  async function rerenderCartSections() {
+    const sections = new Set();
+    document.querySelectorAll(`a[href*="variant="], ${COUNT_SELECTOR}, form[action*="/cart"]`).forEach((el) => {
+      const section = el.closest('[id^="shopify-section-"]');
+      if (section) sections.add(section);
+    });
+    if (sections.size === 0) return false;
+    const ids = [...sections].map((s) => s.id.replace("shopify-section-", ""));
+    const res = await nativeFetch(`${window.location.pathname}?sections=${ids.map(encodeURIComponent).join(",")}`);
+    if (!res.ok) return false;
+    const html = await res.json();
+    let swapped = false;
+    for (const section of sections) {
+      const fresh = html[section.id.replace("shopify-section-", "")];
+      if (!fresh) continue;
+      const doc = new DOMParser().parseFromString(fresh, "text/html");
+      const freshSection = doc.getElementById(section.id) || doc.body;
+      // Swap the innermost element (with an id both versions share) that
+      // holds ALL cart rows — a single row's id would miss new lines —
+      // else the section's contents
+      const links = [...section.querySelectorAll('a[href*="/products/"]')];
+      const freshLinkCount = freshSection.querySelectorAll('a[href*="/products/"]').length;
+      const target =
+        [...section.querySelectorAll("[id]")].reverse().find((el) => {
+          if (links.length === 0 || !links.every((a) => el.contains(a))) return false;
+          // …and in the fresh version too, including newly added lines
+          const twin = freshSection.querySelector(`#${CSS.escape(el.id)}`);
+          return Boolean(twin) && twin.querySelectorAll('a[href*="/products/"]').length === freshLinkCount;
+        }) || section;
+      const twin = target === section ? freshSection : freshSection.querySelector(`#${CSS.escape(target.id)}`);
+      if (!twin) continue;
+      target.innerHTML = twin.innerHTML;
+      swapped = true;
+    }
+    return swapped;
+  }
+
+  let redrawTimer;
+  /**
+   * Make the theme show the cart after our own writes: theme events first
+   * (Dawn pubsub, Horizon cart:update, common cart:* events); if the
+   * visible cart still doesn't match shortly after, re-render sections;
+   * as a last resort reload the cart page.
+   */
+  function refreshCartUi(cartData) {
+    try {
+      // PUB_SUB_EVENTS is script-scoped in Dawn — not on window — so
+      // fall back to the literal event name "cart-update"
+      const evt = window.PUB_SUB_EVENTS?.cartUpdate || "cart-update";
+      if (typeof window.publish === "function" && cartData?.sections) {
+        window.publish(evt, { source: "deposit-sync", cartData });
+      }
+    } catch (e) {}
+    const detail = { cart: cartData, resource: cartData, sourceId: "deposit-sync", data: { source: "deposit-sync", itemCount: cartData?.item_count } };
+    for (const name of ["cart:update", "cart:updated", "cart:refresh", "cart:build", "cart:change", "theme:cart:reload"]) {
+      try {
+        document.dispatchEvent(new CustomEvent(name, { bubbles: true, detail }));
+      } catch (e) {}
     }
 
-    rows.forEach(lockRow);
+    const storage = (fn) => {
+      try {
+        return fn(window.sessionStorage);
+      } catch (e) {
+        return null;
+      }
+    };
+    clearTimeout(redrawTimer);
+    redrawTimer = setTimeout(async () => {
+      if (!cartData?.items) return;
+      if (cartUiMatches(cartData)) {
+        storage((s) => s.removeItem("deposit-cart-reloaded"));
+        return;
+      }
+      try {
+        if (await rerenderCartSections()) {
+          lockDepositRows();
+          patchCartCount();
+          if (cartUiMatches(cartData)) return;
+        }
+      } catch (e) {}
+      // Classic cart pages without an Ajax cart: reload once
+      const onCartPage = /\/cart\/?$/.test(window.location.pathname);
+      if (onCartPage && !storage((s) => s.getItem("deposit-cart-reloaded"))) {
+        storage((s) => s.setItem("deposit-cart-reloaded", "1"));
+        window.location.reload();
+      }
+    }, 700);
   }
 
   /**
@@ -1178,11 +1392,7 @@
       // Skip mutations inside elements we manage (count bubble, qty
       // text) — our own writes must not schedule another pass
       const t = mutation.target;
-      if (
-        t.nodeType === 1 &&
-        (t.closest?.(".cart-count-bubble") ||
-          t.classList?.contains("deposit-qty-static"))
-      ) {
+      if (t.nodeType === 1 && t.classList?.contains("deposit-qty-static")) {
         continue;
       }
 
