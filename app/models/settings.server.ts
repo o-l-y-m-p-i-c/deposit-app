@@ -24,6 +24,7 @@ export async function updateSettings(shopId: string, data: {
   currencyCode?: string;
   bottleCountMode?: string;
   bottleCountKey?: string;
+  depositStyle?: string;
 }) {
   return prisma.depositSettings.upsert({
     where: { shopId },

@@ -134,6 +134,9 @@
   const priceSelector = String(themeSettings.priceSelector || "").trim();
 
   const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
+  // "per_product": each drink has its own "Deposit – <drink>" product,
+  // priced for all its bottles; otherwise one shared deposit product
+  const PER_PRODUCT = config.style === "per_product";
 
   // Cache of product handle -> Promise<product JSON | null>
   const productCache = new Map();
@@ -148,8 +151,22 @@
       if (Number(bottles) > 0) bottlesCache.set(String(id), Promise.resolve(Number(bottles)));
     }
   } catch (e) {}
-  // Handle of the deposit product (read from cart, for row detection)
-  let depositHandle = null;
+  // Product ID -> its own deposit variant ID (per_product style), from
+  // the Liquid seed and the eligibility proxy
+  const depositVariantByProduct = new Map();
+  try {
+    const seeds = JSON.parse(
+      document.getElementById("deposit-variants")?.textContent || "{}",
+    );
+    for (const [id, variant] of Object.entries(seeds)) {
+      if (Number(variant) > 0) depositVariantByProduct.set(String(id), Number(variant));
+    }
+  } catch (e) {}
+  // Variant IDs known to be deposit products (row detection, counting)
+  const depositVariantIds = new Set(DEPOSIT_VARIANT_ID ? [DEPOSIT_VARIANT_ID] : []);
+  depositVariantByProduct.forEach((v) => depositVariantIds.add(v));
+  // Handles of deposit products in the cart (row detection fallback)
+  const depositHandles = new Set();
 
   // Guard flag to prevent infinite MutationObserver loop
   let isUpdating = false;
@@ -169,18 +186,50 @@
   let lastCart = null;
   const variantMeta = new Map(); // vid -> {key, handle, qty} for product lines
   const variantBottles = new Map(); // vid -> deposit units per unit (0 = none)
+  const productOfVariant = new Map(); // vid -> product ID
   const variantStock = new Map(); // vid -> {quantity, policy}
   const depositKeyFor = new Map(); // product vid -> deposit line key
+
+  /**
+   * A deposit line: the shared deposit variant, a known per-drink deposit
+   * variant, or any line we linked with _deposit_for.
+   */
+  function isDepositLine(item) {
+    return (
+      depositVariantIds.has(item.variant_id) ||
+      Boolean(item.properties?._deposit_for)
+    );
+  }
+
+  /** The deposit variant a product variant's deposit line should use. */
+  function depositVariantFor(vid) {
+    if (PER_PRODUCT) {
+      const own = depositVariantByProduct.get(String(productOfVariant.get(vid)));
+      if (own) return own;
+    }
+    return DEPOSIT_VARIANT_ID;
+  }
+
+  /**
+   * Deposit line units per product unit: 1 for a drink's own deposit
+   * product (priced for all its bottles), else its bottle count.
+   */
+  function unitsFor(vid) {
+    const bottles = variantBottles.get(vid) || 0;
+    if (!bottles) return 0;
+    return depositVariantFor(vid) === DEPOSIT_VARIANT_ID ? bottles : 1;
+  }
 
   function indexCart(cart) {
     lastCart = cart;
     variantMeta.clear();
     depositKeyFor.clear();
     for (const item of cart.items || []) {
-      if (item.variant_id === DEPOSIT_VARIANT_ID) {
+      if (isDepositLine(item)) {
         const forVid = Number(item.properties?._deposit_for);
         if (forVid) depositKeyFor.set(forVid, item.key);
-        depositHandle = item.handle || depositHandle;
+        depositVariantIds.add(item.variant_id);
+        if (item.handle) depositHandles.add(item.handle);
       } else {
         variantMeta.set(item.variant_id, {
           key: item.key,
@@ -197,11 +246,14 @@
     return it?.product_title || it?.title || "";
   }
 
-  /** Properties for a deposit line linked to a product variant. */
+  /**
+   * Properties for a deposit line linked to a product variant. A drink's
+   * own deposit product names the drink in its title already.
+   */
   function depositProps(vid) {
     const props = { _deposit_for: String(vid) };
     const title = titleForVid(vid);
-    if (title) props["Deposit for"] = title;
+    if (title && depositVariantFor(vid) === DEPOSIT_VARIANT_ID) props["Deposit for"] = title;
     return props;
   }
   // Backoff state — failed writes must not retry in a hot loop
@@ -280,7 +332,14 @@
         });
         if (!res.ok) throw new Error(`eligibility ${res.status}`);
         const data = await res.json();
-        chunk.forEach((id) => batch.get(id).resolve(Number(data?.products?.[id]) || 0));
+        chunk.forEach((id) => {
+          const variant = Number(data?.depositVariants?.[id]);
+          if (variant > 0) {
+            depositVariantByProduct.set(id, variant);
+            depositVariantIds.add(variant);
+          }
+          batch.get(id).resolve(Number(data?.products?.[id]) || 0);
+        });
       } catch (e) {
         chunk.forEach((id) => batch.get(id).reject(e));
       }
@@ -531,6 +590,7 @@
    * variants of a product share them). Throws on transient failures.
    */
   async function ensureBottles(vid, productId) {
+    if (productId) productOfVariant.set(vid, productId);
     if (variantBottles.has(vid)) return variantBottles.get(vid);
     const bottles = await getBottles(productId);
     variantBottles.set(vid, bottles);
@@ -552,7 +612,7 @@
 
   /** Expected deposit qty for a variant: its quantity × deposit units. */
   function expectedQty(vid, changedKey, newQty) {
-    return productQty(vid, changedKey, newQty) * (variantBottles.get(vid) || 0);
+    return productQty(vid, changedKey, newQty) * unitsFor(vid);
   }
 
   /**
@@ -569,6 +629,7 @@
       const bottles = await getBottles(product.id);
       (product.variants || []).forEach((v) => {
         variantBottles.set(Number(v.id), bottles);
+        productOfVariant.set(Number(v.id), product.id);
       });
     } catch (e) {}
   }
@@ -631,12 +692,12 @@
       for (const a of adds) {
         const vid = Number(a.id);
         const qty = Number(a.quantity || 1);
-        const bottles = variantBottles.get(vid);
-        if (!bottles || vid === DEPOSIT_VARIANT_ID) continue;
+        const units = unitsFor(vid);
+        if (!units || depositVariantIds.has(vid)) continue;
         // Water add will fail server-side on inventory — skip deposit
         const newProductQty = productQty(vid) + qty;
         if (!canSell(vid, newProductQty)) continue;
-        const newExpected = newProductQty * bottles;
+        const newExpected = newProductQty * units;
         const depKey = depositKeyFor.get(vid);
         const p = depKey
           ? postCart("/cart/change.js", {
@@ -648,9 +709,9 @@
           : postCart("/cart/add.js", {
               items: [
                 {
-                  id: DEPOSIT_VARIANT_ID,
+                  id: depositVariantFor(vid),
                   quantity: newExpected,
-                  properties: { _deposit_for: String(vid) },
+                  properties: depositProps(vid),
                 },
               ],
               sections: CART_SECTIONS,
@@ -686,7 +747,7 @@
       if (!item) return null;
       const vid = item.variant_id;
 
-      if (vid === DEPOSIT_VARIANT_ID) {
+      if (isDepositLine(item)) {
         // Pin deposit edits back to the expected quantity (units not
         // known yet → keep the current quantity; sync settles it)
         const forVid = Number(item.properties?._deposit_for);
@@ -727,7 +788,7 @@
       // through so Shopify returns its native inventory error
       for (const [key, qtyStr] of Object.entries(data.updates)) {
         const item = lastCart.items.find((i) => i.key === key);
-        if (item && item.variant_id !== DEPOSIT_VARIANT_ID && !canSell(item.variant_id, Number(qtyStr))) {
+        if (item && !isDepositLine(item) && !canSell(item.variant_id, Number(qtyStr))) {
           return null;
         }
       }
@@ -736,7 +797,7 @@
         const item = lastCart.items.find((i) => i.key === key);
         if (!item) continue;
         const vid = item.variant_id;
-        if (vid === DEPOSIT_VARIANT_ID) {
+        if (isDepositLine(item)) {
           const forVid = Number(item.properties?._deposit_for);
           updates[key] = variantBottles.has(forVid) ? expectedQty(forVid) : item.quantity;
           continue;
@@ -749,7 +810,7 @@
       const check = {};
       for (const [key, qtyStr] of Object.entries(data.updates)) {
         const item = lastCart.items.find((i) => i.key === key);
-        if (item && item.variant_id !== DEPOSIT_VARIANT_ID) {
+        if (item && !isDepositLine(item)) {
           check[key] = Number(qtyStr);
         }
       }
@@ -795,21 +856,22 @@
       // request instead of one per line. Throws → abort without writing.
       await Promise.all(
         (cart.items || [])
-          .filter((i) => i.variant_id !== DEPOSIT_VARIANT_ID)
+          .filter((i) => !isDepositLine(i))
           .map((i) => ensureBottles(i.variant_id, i.product_id)),
       );
 
       for (const item of cart.items || []) {
-        if (item.variant_id === DEPOSIT_VARIANT_ID) {
+        if (isDepositLine(item)) {
           depositLines.push(item);
           continue;
         }
         // Throws on transient fetch failures → abort without writing
-        const bottles = await ensureBottles(item.variant_id, item.product_id);
-        if (bottles > 0) {
+        await ensureBottles(item.variant_id, item.product_id);
+        const units = unitsFor(item.variant_id);
+        if (units > 0) {
           expectedByVariant.set(
             item.variant_id,
-            (expectedByVariant.get(item.variant_id) || 0) + item.quantity * bottles,
+            (expectedByVariant.get(item.variant_id) || 0) + item.quantity * units,
           );
         }
       }
@@ -819,10 +881,13 @@
       // Fix or remove existing deposit lines
       for (const line of depositLines) {
         const forVid = Number(line.properties?._deposit_for) || null;
-        const expected = forVid ? expectedByVariant.get(forVid) || 0 : 0;
+        // A line on the wrong deposit product (style switched) counts
+        // as an orphan: removed here, re-added on the right one below
+        const rightProduct = forVid && line.variant_id === depositVariantFor(forVid);
+        const expected = rightProduct ? expectedByVariant.get(forVid) || 0 : 0;
         if (expected === 0) {
-          // Orphan: product left the cart, or a legacy line without
-          // the _deposit_for property → remove and re-add properly
+          // Orphan: product left the cart, a legacy line without the
+          // _deposit_for property, or the wrong deposit product → remove
           writes.push(
             postCart("/cart/change.js", {
               id: line.key,
@@ -831,8 +896,11 @@
               sections_url: window.location.pathname,
             }),
           );
-        } else if (line.quantity !== expected || !line.properties?.["Deposit for"]) {
-          // Wrong qty or missing visible "Deposit for" property
+        } else if (
+          line.quantity !== expected ||
+          Boolean(line.properties?.["Deposit for"]) !== Boolean(depositProps(forVid)["Deposit for"])
+        ) {
+          // Wrong qty, or the visible "Deposit for" note missing/extra
           writes.push(
             postCart("/cart/change.js", {
               id: line.key,
@@ -848,14 +916,14 @@
       // Add missing deposit lines (one per eligible variant)
       for (const [vid, qty] of expectedByVariant) {
         const exists = depositLines.some(
-          (l) => Number(l.properties?._deposit_for) === vid,
+          (l) => Number(l.properties?._deposit_for) === vid && l.variant_id === depositVariantFor(vid),
         );
         if (!exists) {
           writes.push(
             postCart("/cart/add.js", {
               items: [
                 {
-                  id: DEPOSIT_VARIANT_ID,
+                  id: depositVariantFor(vid),
                   quantity: qty,
                   properties: depositProps(vid),
                 },
@@ -969,7 +1037,7 @@
   function patchCartCount() {
     if (!lastCart) return;
     const count = (lastCart.items || []).reduce(
-      (s, i) => (i.variant_id === DEPOSIT_VARIANT_ID ? s : s + i.quantity),
+      (s, i) => (isDepositLine(i) ? s : s + i.quantity),
       0,
     );
     document.querySelectorAll(".cart-count-bubble").forEach((b) => {
@@ -1000,23 +1068,23 @@
     if (!DEPOSIT_VARIANT_ID) return;
     injectLockStyles();
 
-    const prefix = `${DEPOSIT_VARIANT_ID}:`;
     const rows = new Set();
 
     document
       .querySelectorAll("[data-quantity-line-key]")
       .forEach((el) => {
+        // Line keys are "{variantId}:{hash}"
         const key = el.getAttribute("data-quantity-line-key") || "";
-        if (!key.startsWith(prefix)) return;
+        if (!depositVariantIds.has(Number(key.split(":")[0]))) return;
         const row = el.closest(
           "tr.cart-item, .cart-item, .cart-drawer-item, tr, li",
         );
         if (row) rows.add(row);
       });
 
-    if (depositHandle) {
+    for (const handle of depositHandles) {
       document
-        .querySelectorAll(`a[href*="/products/${depositHandle}"]`)
+        .querySelectorAll(`a[href*="/products/${handle}"]`)
         .forEach((a) => {
           const row = a.closest(
             "tr.cart-item, .cart-item, .cart-drawer-item",

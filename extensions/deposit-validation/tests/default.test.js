@@ -11,7 +11,7 @@ const config = (overrides = {}) =>
     ...overrides,
   });
 
-const productLine = (id, quantity, bottles = "1") => ({
+const productLine = (id, quantity, bottles = "1", depositVariant = null) => ({
   id: `gid://shopify/CartLine/${id}`,
   quantity,
   merchandise: {
@@ -19,7 +19,20 @@ const productLine = (id, quantity, bottles = "1") => ({
     id: `gid://shopify/ProductVariant/${id}`,
     product: {
       bottles: bottles === null ? null : { value: bottles },
+      depositVariant: depositVariant === null ? null : { value: depositVariant },
+      isDepositItem: false,
     },
+  },
+});
+
+// Per-drink deposit product line ("Deposit – <drink>")
+const itemLine = (variantNumber, quantity) => ({
+  id: `gid://shopify/CartLine/item-${variantNumber}`,
+  quantity,
+  merchandise: {
+    __typename: "ProductVariant",
+    id: `gid://shopify/ProductVariant/${variantNumber}`,
+    product: { bottles: null, depositVariant: null, isDepositItem: true },
   },
 });
 
@@ -87,6 +100,43 @@ describe("Deposit validation", () => {
     expect(ok.operations).toEqual([]);
     const short = cartValidationsGenerateRun(input([productLine(1, 2, "6"), depositLine(2)]));
     expect(short.operations[0].validationAdd.errors.length).toBe(1);
+  });
+
+  describe("per_product style", () => {
+    const perProduct = config({ style: "per_product" });
+
+    test("allows each drink with its own deposit product", () => {
+      const result = cartValidationsGenerateRun(
+        input([productLine(1, 2, "1", "501"), itemLine(501, 2), productLine(2, 1, "6", "502"), itemLine(502, 1)], perProduct),
+      );
+      expect(result.operations).toEqual([]);
+    });
+
+    test("blocks when a drink's deposit product is missing", () => {
+      const result = cartValidationsGenerateRun(
+        input([productLine(1, 2, "1", "501"), productLine(2, 1, "1", "502"), itemLine(502, 1)], perProduct),
+      );
+      expect(result.operations[0].validationAdd.errors.length).toBe(1);
+    });
+
+    test("blocks a deposit product swapped onto another drink", () => {
+      const result = cartValidationsGenerateRun(
+        input([productLine(1, 2, "1", "501"), itemLine(502, 2)], perProduct),
+      );
+      expect(result.operations[0].validationAdd.errors.length).toBe(1);
+    });
+
+    test("blocks a deposit product bought alone", () => {
+      const result = cartValidationsGenerateRun(input([itemLine(501, 1)], perProduct));
+      expect(result.operations[0].validationAdd.errors[0].message).toMatch(/on its own/);
+    });
+
+    test("falls back to the shared deposit for drinks without their own", () => {
+      const result = cartValidationsGenerateRun(
+        input([productLine(1, 3, "1", null), depositLine(3)], perProduct),
+      );
+      expect(result.operations).toEqual([]);
+    });
   });
 
   test("no-ops when mode is expand", () => {

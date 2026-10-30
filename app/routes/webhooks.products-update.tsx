@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { prisma } from "~/db.server";
 import { getRulesGrouped } from "~/lib/deposit.server";
+import { syncDepositItems } from "~/lib/deposit-items.server";
 import { recomputeProduct } from "~/lib/eligibility.server";
 import { authenticate } from "~/shopify.server";
 
@@ -10,7 +11,9 @@ import { authenticate } from "~/shopify.server";
  *
  * Re-evaluates the deposit rules for the changed product and updates its
  * $app:deposit.bottles metafield (tags or collections may have changed).
- * Deleted products drop out of the DepositProduct mirror.
+ * Deleted products drop out of the DepositProduct mirror. In the
+ * per-drink deposit style the drink's "Deposit – <title>" product is
+ * created, renamed or archived to match.
  *
  * Work runs after the response so the webhook stays within Shopify's
  * 5s timeout. Our own metafield writes fire products/update too;
@@ -32,10 +35,19 @@ export async function action({ request }: ActionFunctionArgs) {
     const settings = await prisma.depositSettings.findUnique({ where: { shopId: shop } });
     // Not set up yet, or the deposit product itself — nothing to evaluate
     if (!settings || settings.depositProductId === productGid) return;
+    const productId = productGid.split("/").pop()!;
+    // A per-drink deposit product (our own productSet fires this too)
+    if (await prisma.depositItem.findFirst({ where: { shopId: shop, productId } })) return;
 
     const rules = await getRulesGrouped(shop);
     const before = await prisma.depositProduct.count({ where: { shopId: shop } });
     await recomputeProduct(shop, productGid, rules);
+    // Per-drink style: create, rename or archive this drink's deposit product
+    await syncDepositItems(shop, {
+      style: settings.depositStyle,
+      amountMinor: settings.amountMinor,
+      onlyProductIds: [productId],
+    });
     const after = await prisma.depositProduct.count({ where: { shopId: shop } });
     if (before !== after) {
       await prisma.syncLog.create({

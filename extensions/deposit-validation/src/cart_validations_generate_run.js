@@ -21,11 +21,20 @@
  * (deposit units per product unit), written by the app's server-side
  * sync — the same data the storefront script reads via the app proxy.
  *
+ * Two deposit styles:
+ *   "shared"      — one deposit product (depositVariantId); a drink needs
+ *                   quantity × bottles of it
+ *   "per_product" — each drink has its own "Deposit – <drink>" product
+ *                   ($app:deposit.deposit_variant, priced per unit incl.
+ *                   all bottles); a drink needs quantity of it
+ * Lines are compared per deposit variant.
+ *
  * Configuration JSON shape (stored in the Validation owner metafield
  * $app:deposit -> function-configuration):
  * {
  *   "enabled": true,
  *   "mode": "line",
+ *   "style": "shared" | "per_product",
  *   "depositVariantId": "gid://shopify/ProductVariant/xxx"
  * }
  */
@@ -69,8 +78,13 @@ export function cartValidationsGenerateRun(input) {
     return NO_ERRORS;
   }
 
-  let expected = 0;
-  let depositQty = 0;
+  const perProduct = config.style === "per_product";
+  /** @type {Map<string, number>} deposit variant -> required quantity */
+  const expected = new Map();
+  /** @type {Map<string, number>} deposit variant -> quantity in the cart */
+  const actual = new Map();
+  const add = (/** @type {Map<string, number>} */ map, /** @type {string} */ id, /** @type {number} */ qty) =>
+    map.set(id, (map.get(id) || 0) + qty);
 
   for (const line of input.cart.lines) {
     const merchandise = /** @type {any} */ (line.merchandise);
@@ -78,26 +92,34 @@ export function cartValidationsGenerateRun(input) {
       continue;
     }
 
-    if (merchandise.id === config.depositVariantId) {
-      depositQty += line.quantity;
+    const product = merchandise.product;
+    if (merchandise.id === config.depositVariantId || product?.isDepositItem) {
+      add(actual, merchandise.id, line.quantity);
       continue;
     }
-
-    const product = merchandise.product;
     if (!product) continue;
 
     const bottles = parseInt(product.bottles?.value ?? "", 10);
-    if (bottles > 0) {
-      expected += line.quantity * bottles;
+    if (!(bottles > 0)) continue;
+
+    const ownDeposit = parseInt(product.depositVariant?.value ?? "", 10);
+    if (perProduct && ownDeposit > 0) {
+      // Its own deposit product is priced for all bottles of one unit
+      add(expected, `gid://shopify/ProductVariant/${ownDeposit}`, line.quantity);
+    } else {
+      add(expected, config.depositVariantId, line.quantity * bottles);
     }
   }
 
-  if (depositQty === expected) {
+  const variants = new Set([...expected.keys(), ...actual.keys()]);
+  const mismatch = [...variants].some((id) => (expected.get(id) || 0) !== (actual.get(id) || 0));
+  if (!mismatch) {
     return NO_ERRORS;
   }
+  const anyExpected = [...expected.values()].some((qty) => qty > 0);
 
   const message =
-    expected > 0
+    anyExpected
       ? "The bottle deposit is required and its quantity is managed automatically. Return to the cart and try again."
       : "The deposit product can't be purchased on its own.";
 

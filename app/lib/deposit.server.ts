@@ -21,6 +21,7 @@ import {
 } from "~/lib/admin-api.server";
 import { getBillingAccess } from "~/lib/billing.server";
 import { syncBilling } from "~/models/billing.server";
+import { depositItemProductIds, syncDepositItems } from "~/lib/deposit-items.server";
 import { syncEligibility } from "~/lib/eligibility.server";
 
 const VALIDATION_HANDLE = "deposit-validation";
@@ -235,6 +236,7 @@ export async function syncFunctionMetafields(
   settings: {
     enabled: boolean;
     depositMode: string;
+    depositStyle: string;
     amountMinor: number;
     currencyCode: string;
     depositVariantId: string | null;
@@ -243,6 +245,9 @@ export async function syncFunctionMetafields(
   const config = {
     enabled: settings.enabled,
     mode: settings.depositMode,
+    // "shared" = one deposit product; "per_product" = each drink's own
+    // deposit product ($app:deposit.deposit_variant on the drink)
+    style: settings.depositStyle,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositVariantId: settings.depositVariantId,
@@ -281,12 +286,15 @@ export async function syncStorefrontMetafield(
     currencyCode: string;
     depositVariantId: string | null;
     depositMode: string;
+    depositStyle: string;
   },
 ) {
   const config = {
     enabled: settings.enabled,
     // "line" → the storefront script adds and maintains the deposit line
     mode: settings.depositMode,
+    // Which deposit product the line uses (see syncFunctionMetafields)
+    style: settings.depositStyle,
     amountMinor: settings.amountMinor,
     currencyCode: settings.currencyCode,
     depositAmount: (settings.amountMinor / 100).toFixed(2),
@@ -370,9 +378,14 @@ export async function fullSync(
   try {
     // Evaluate the rules once, server-side, onto product metafields —
     // Functions, Liquid and the storefront script all read the result
+    // Deposit products themselves never carry a deposit
+    const skipProductIds = [
+      ...(settings.depositProductId ? [settings.depositProductId] : []),
+      ...(await depositItemProductIds(shop)).map((id) => `gid://shopify/Product/${id}`),
+    ];
     const result = await syncEligibility(shop, await getRulesGrouped(shop), {
       force,
-      skipProductIds: settings.depositProductId ? [settings.depositProductId] : [],
+      skipProductIds,
     });
     await log(
       "sync_eligibility",
@@ -381,6 +394,26 @@ export async function fullSync(
     );
   } catch (error) {
     await log("sync_eligibility", "error", String(error));
+    throw error;
+  }
+
+  try {
+    // "per_product": a "Deposit – <drink>" product per flagged drink;
+    // "shared": archives any left from per_product
+    const result = await syncDepositItems(shop, {
+      style: settings.depositStyle,
+      amountMinor: settings.amountMinor,
+      force,
+    });
+    if (result.created + result.updated + result.archived > 0) {
+      await log(
+        "sync_deposit_items",
+        "success",
+        `Deposit products: +${result.created} new, ${result.updated} updated, ${result.archived} archived`,
+      );
+    }
+  } catch (error) {
+    await log("sync_deposit_items", "error", String(error));
     throw error;
   }
 
@@ -421,6 +454,7 @@ export async function fullSync(
       await syncFunctionMetafields(shop, [validationId], {
         enabled: depositActive,
         depositMode: settings.depositMode,
+        depositStyle: settings.depositStyle,
         amountMinor: settings.amountMinor,
         currencyCode: settings.currencyCode,
         depositVariantId: settings.depositVariantId,
@@ -439,6 +473,7 @@ export async function fullSync(
       currencyCode: settings.currencyCode,
       depositVariantId: settings.depositVariantId,
       depositMode: settings.depositMode,
+      depositStyle: settings.depositStyle,
     });
     await log("sync_storefront", "success", "Storefront metafield synced");
   } catch (error) {
@@ -587,10 +622,18 @@ export async function cleanupShop(shop: string) {
     }
   }
 
-  // 4. Delete all rules and settings from the database
+  // 4. Archive per-drink deposit products (kept for past orders)
+  try {
+    await syncDepositItems(shop, { style: "shared", amountMinor: 0 });
+  } catch (error) {
+    await log("archive_deposit_items", "warning", String(error));
+  }
+
+  // 5. Delete all rules and settings from the database
   await prisma.depositRule.deleteMany({ where: { shopId: shop } });
   // Product metafields are app-owned and removed by Shopify on uninstall
   await prisma.depositProduct.deleteMany({ where: { shopId: shop } });
+  await prisma.depositItem.deleteMany({ where: { shopId: shop } });
   await prisma.depositSettings.deleteMany({ where: { shopId: shop } });
   await log("cleanup_db", "success", "Deleted all rules and settings");
 }

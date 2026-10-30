@@ -10,7 +10,9 @@ const MAX_IDS = 250;
  * App proxy: GET /apps/deposit/eligibility?ids=123,456
  *
  * Returns deposit units per product unit for the requested numeric
- * product IDs ({ products: { "123": 1, "456": 0 } }) — the same data as
+ * product IDs ({ products: { "123": 1, "456": 0 } }) and, in the
+ * per-drink deposit style, each drink's own deposit variant
+ * ({ depositVariants: { "123": 4711 } }) — the same data as
  * the $app:deposit.bottles metafield the Functions read, so the
  * storefront script never disagrees with checkout.
  *
@@ -32,6 +34,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ].slice(0, MAX_IDS);
 
   const products: Record<string, number> = Object.fromEntries(ids.map((id) => [id, 0]));
+  // Per-drink deposit style: each drink's own deposit variant
+  const depositVariants: Record<string, number> = {};
   // After the trial without a subscription: no deposit, no labels — even
   // before the hourly sweep re-syncs the storefront config
   if (shop && ids.length > 0 && (await hasBillingAccess(shop))) {
@@ -42,10 +46,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
     rows.forEach((r) => {
       products[r.productId] = r.bottles;
     });
+    const items = await prisma.depositItem.findMany({
+      where: { shopId: shop, sourceProductId: { in: ids }, active: true },
+      select: { sourceProductId: true, variantId: true },
+    });
+    items.forEach((i) => {
+      depositVariants[i.sourceProductId] = Number(i.variantId);
+    });
   }
 
   return json(
-    { products },
+    { products, depositVariants },
     { headers: { "Cache-Control": "public, max-age=60" } },
   );
 }

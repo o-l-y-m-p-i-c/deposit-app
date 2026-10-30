@@ -79,6 +79,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       depositProductId: settings.depositProductId,
       depositVariantId: settings.depositVariantId,
       validationId: settings.validationId,
+      depositStyle: settings.depositStyle,
       lastSyncedAt: settings.lastSyncedAt,
     },
     includeTags,
@@ -110,8 +111,12 @@ export async function action({ request }: ActionFunctionArgs) {
     if (isNaN(amountMinor) || amountMinor < 0) {
       return json({ error: "Invalid deposit amount" }, { status: 400 });
     }
+    const depositStyle = body.get("depositStyle");
+    if (depositStyle !== "shared" && depositStyle !== "per_product") {
+      return json({ error: "Invalid deposit style" }, { status: 400 });
+    }
 
-    await updateSettings(session.shop, { enabled, amountMinor });
+    await updateSettings(session.shop, { enabled, amountMinor, depositStyle });
 
     // Trigger full sync
     try {
@@ -198,6 +203,7 @@ export default function SettingsPage() {
   const fetcher = useFetcher();
 
   const [enabled, setEnabled] = useState(data.settings.enabled);
+  const [depositStyle, setDepositStyle] = useState(data.settings.depositStyle);
   const [amountEuros, setAmountEuros] = useState((data.settings.amountMinor / 100).toFixed(2));
   const [showAddModal, setShowAddModal] = useState(false);
   const [newRuleEffect, setNewRuleEffect] = useState("INCLUDE");
@@ -211,8 +217,9 @@ export default function SettingsPage() {
 
   useEffect(() => {
     setEnabled(data.settings.enabled);
+    setDepositStyle(data.settings.depositStyle);
     setAmountEuros((data.settings.amountMinor / 100).toFixed(2));
-  }, [data.settings.enabled, data.settings.amountMinor]);
+  }, [data.settings.enabled, data.settings.amountMinor, data.settings.depositStyle]);
 
   const handleSaveSettings = useCallback(() => {
     const amountMinor = Math.round(parseFloat(amountEuros) * 100);
@@ -221,10 +228,15 @@ export default function SettingsPage() {
       return;
     }
     fetcher.submit(
-      { intent: "updateSettings", enabled: String(enabled), amountMinor: String(amountMinor) },
+      {
+        intent: "updateSettings",
+        enabled: String(enabled),
+        amountMinor: String(amountMinor),
+        depositStyle,
+      },
       { method: "post" },
     );
-  }, [amountEuros, enabled, fetcher]);
+  }, [amountEuros, enabled, depositStyle, fetcher]);
 
   const handleAddRule = useCallback(() => {
     let value = "";
@@ -373,6 +385,26 @@ export default function SettingsPage() {
                   onChange={(selected) => setEnabled(selected[0] === "true")}
                 />
 
+                <ChoiceList
+                  title="Deposit in the cart"
+                  choices={[
+                    {
+                      label: "One shared deposit product",
+                      value: "shared",
+                      helpText:
+                        'A "Bottle Deposit" line per drink, linked by a "Deposit for: <drink>" note.',
+                    },
+                    {
+                      label: "A deposit product per drink",
+                      value: "per_product",
+                      helpText:
+                        'The app creates "Deposit – <drink>" products; the line title shows the drink. Takes a moment on first sync.',
+                    },
+                  ]}
+                  selected={[depositStyle]}
+                  onChange={(selected) => setDepositStyle(selected[0])}
+                />
+
                 <TextField
                   label="Deposit amount per bottle"
                   type="number"
@@ -395,9 +427,10 @@ export default function SettingsPage() {
                       This text appears next to prices on the storefront.
                     </Text>
                     <Text tone="subdued" as="p">
-                      In the cart and checkout the deposit is a separate "Bottle Deposit" line with
-                      its own price, linked to each product ("Deposit for: …"). Keep the "Deposit
-                      Price Display" app embed on — it adds and updates that line.
+                      {data.settings.depositStyle === "per_product"
+                        ? 'In the cart and checkout each drink gets its own "Deposit – <drink>" line with its own price.'
+                        : 'In the cart and checkout the deposit is a separate "Bottle Deposit" line with its own price, linked to each drink ("Deposit for: …").'}{" "}
+                      Keep the "Deposit Price Display" app embed on — it adds and updates that line.
                     </Text>
                     {!data.settings.validationId && data.settings.lastSyncedAt && (
                       <Banner tone="warning">
@@ -509,7 +542,12 @@ export default function SettingsPage() {
                       trial_expired: "Trial ended",
                     }[data.billingReason],
                   ],
-                  ["Cart", "Separate deposit line"],
+                  [
+                    "Cart",
+                    data.settings.depositStyle === "per_product"
+                      ? "Deposit product per drink"
+                      : "Shared deposit product",
+                  ],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
                   [
                     "Checkout check",

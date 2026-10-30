@@ -39,7 +39,16 @@
   .quantity-popover-container:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
   quantity-popover:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
   .quantity-popover-wrapper:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
-  tr:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]) cart-remove-button {
+  tr:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]) cart-remove-button
+  {%- for item in cart.items -%}
+    {%- if item.properties._deposit_for and item.variant_id != deposit_config.depositVariantId -%},
+  quantity-input[data-quantity-variant-id="{{ item.variant_id }}"],
+  quantity-input[data-quantity-variant-id="{{ item.variant_id }}"] ~ cart-remove-button,
+  .quantity-popover-container:has(quantity-input[data-quantity-variant-id="{{ item.variant_id }}"]),
+  quantity-popover:has(quantity-input[data-quantity-variant-id="{{ item.variant_id }}"]),
+  tr:has(quantity-input[data-quantity-variant-id="{{ item.variant_id }}"]) cart-remove-button
+    {%- endif -%}
+  {%- endfor %} {
     display: none !important;
   }
 
@@ -92,6 +101,22 @@
   {%- endfor -%}
 {%- endcapture -%}
 <script id="deposit-bottles" type="application/json">{ {{- deposit_bottles | strip | remove_last: "," -}} }</script>
+
+{%- comment -%}
+  Per-drink deposit style: each drink's own deposit variant
+  ($app:deposit.deposit_variant), for the current product and cart lines.
+{%- endcomment -%}
+{%- capture deposit_variants -%}
+  {%- if product -%}
+    {%- assign v = product.metafields["$app:deposit"].deposit_variant.value -%}
+    {%- if v > 0 -%}"{{ product.id }}":{{ v }},{%- endif -%}
+  {%- endif -%}
+  {%- for item in cart.items -%}
+    {%- assign v = item.product.metafields["$app:deposit"].deposit_variant.value -%}
+    {%- if v > 0 -%}"{{ item.product_id }}":{{ v }},{%- endif -%}
+  {%- endfor -%}
+{%- endcapture -%}
+<script id="deposit-variants" type="application/json">{ {{- deposit_variants | strip | remove_last: "," -}} }</script>
 
 {%- comment -%}
   Standalone deposit lines in the cart. In expand mode (or with the

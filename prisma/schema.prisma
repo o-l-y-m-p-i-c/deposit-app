@@ -45,7 +45,8 @@ model DepositSettings {
   depositVariantId  String?  // Shopify variant GID
   cartTransformId   String?  // Shopify cart transform GID
   validationId      String?  // Shopify validation GID
-  depositMode       String   @default("expand") // "expand" = deposit bundled into the product line by the Cart Transform ("line" retired)
+  depositMode       String   @default("expand") // set to "line" by every sync: the deposit is a separate cart line ("expand" bundling retired)
+  depositStyle      String   @default("shared") // "shared" = one "Bottle Deposit" product | "per_product" = "Deposit – <drink>" product per drink
   bottleCountMode   String   @default("single") // "single" | "metafield"
   bottleCountKey    String?  // metafield key for bottle count, e.g. "bottles_per_unit"
   lastSyncedAt      DateTime?
@@ -134,4 +135,20 @@ model BillingSubscription {
   updatedAt        DateTime  @updatedAt
 
   @@index([shopId])
+}
+
+// Per-drink deposit products ("Deposit – <drink title>") created by the
+// app in the "per_product" deposit style. Archived (not deleted) when a
+// drink loses its deposit or the style switches back to "shared".
+model DepositItem {
+  shopId          String
+  sourceProductId String   // numeric ID of the drink
+  productId       String   // numeric ID of its deposit product
+  variantId       String   // numeric ID of the deposit product's variant
+  title           String
+  priceMinor      Int
+  active          Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+
+  @@id([shopId, sourceProductId])
 }

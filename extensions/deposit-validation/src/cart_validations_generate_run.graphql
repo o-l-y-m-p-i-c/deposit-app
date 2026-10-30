@@ -17,6 +17,12 @@ query CartValidationsGenerateRunInput {
             bottles: metafield(namespace: "$app:deposit", key: "bottles") {
               value
             }
+            # Per-drink deposit style: this drink's own deposit variant
+            depositVariant: metafield(namespace: "$app:deposit", key: "deposit_variant") {
+              value
+            }
+            # True on the per-drink deposit products themselves
+            isDepositItem: hasAnyTag(tags: ["bottle-deposit-item"])
           }
         }
       }
