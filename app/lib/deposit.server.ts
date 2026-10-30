@@ -5,8 +5,8 @@
 import { prisma } from "~/db.server";
 import {
   adminGraphql,
-  CREATE_CART_TRANSFORM,
   CREATE_DEPOSIT_PRODUCT,
+  CREATE_VALIDATION,
   DELETE_CART_TRANSFORM,
   DELETE_PRODUCT,
   DELETE_VALIDATION,
@@ -23,7 +23,7 @@ import { getBillingAccess } from "~/lib/billing.server";
 import { syncBilling } from "~/models/billing.server";
 import { syncEligibility } from "~/lib/eligibility.server";
 
-const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
+const VALIDATION_HANDLE = "deposit-validation";
 const VALIDATION_TITLE = "Bottle Deposit";
 
 /**
@@ -158,77 +158,76 @@ export async function publishDepositProduct(shop: string, productId: string) {
 }
 
 /**
- * Get or create a Cart Transform for the shop.
- * If `existingId` is provided, verifies it still exists in Shopify;
- * if it was deleted (e.g. app reinstalled), a new one is created.
+ * Delete this app's Cart Transforms. The deposit is a separate cart line
+ * on every store (shown with its own price in cart and checkout); the
+ * transform's bundling hid the deposit price inside the product line.
+ */
+export async function deleteCartTransforms(shop: string) {
+  const existingResult = await adminGraphql(GET_CART_TRANSFORMS, {}, shop);
+  const nodes: { id: string }[] = existingResult?.data?.cartTransforms?.nodes ?? [];
+  for (const { id } of nodes) {
+    const result = await adminGraphql(DELETE_CART_TRANSFORM, { id }, shop);
+    const errors = result?.data?.cartTransformDelete?.userErrors;
+    if (errors?.length > 0) {
+      throw new Error(`Failed to delete cart transform: ${JSON.stringify(errors)}`);
+    }
+  }
+  return nodes.map((n) => n.id);
+}
+
+/**
+ * Get or create this app's Validation object — the server-side check
+ * that the deposit line is present at checkout.
+ *
+ * The validation Function only enforces at checkout buyer-journey steps;
+ * on cart interactions it passes, so its errors can't reject the
+ * storefront script's own cart mutations. It backs up "Buy it now",
+ * express checkout, blocked JS and direct /cart API calls.
  *
  * Returns null when Shopify refuses to activate the Function on this
  * shop's plan (custom apps can only run Functions on Shopify Plus) —
- * the caller then falls back to the storefront "line" mode.
+ * the deposit line is then storefront-only.
  */
-export async function getOrCreateCartTransform(
+export async function getOrCreateValidation(
   shop: string,
   existingId?: string | null,
 ): Promise<{ id: string } | null> {
-  const existingResult = await adminGraphql(GET_CART_TRANSFORMS, {}, shop);
-  const nodes = existingResult?.data?.cartTransforms?.nodes ?? [];
+  const existingResult = await adminGraphql(GET_VALIDATIONS, {}, shop);
+  const nodes = existingResult?.data?.validations?.nodes ?? [];
 
-  // Reuse the stored ID if it still exists
-  if (existingId) {
-    const match = nodes.find((n: { id: string }) => n.id === existingId);
-    if (match) return match;
-  }
+  // Reuse the stored ID if it still exists, else one created earlier
+  const match =
+    (existingId && nodes.find((n: { id: string }) => n.id === existingId)) ||
+    nodes.find((n: { title?: string }) => n.title === VALIDATION_TITLE);
+  if (match) return match;
 
-  // Reuse any other existing Cart Transform for this app
-  if (nodes.length > 0) return nodes[0];
-
-  // Otherwise create a new one
-  const result = await adminGraphql(CREATE_CART_TRANSFORM, {
-    functionHandle: CART_TRANSFORM_HANDLE,
+  const result = await adminGraphql(CREATE_VALIDATION, {
+    validation: {
+      title: VALIDATION_TITLE,
+      functionHandle: VALIDATION_HANDLE,
+      enable: true,
+      blockOnFailure: false,
+    },
   }, shop);
-  const cartTransform = result?.data?.cartTransformCreate?.cartTransform;
-  const errors: { message?: string }[] = result?.data?.cartTransformCreate?.userErrors ?? [];
+  const validation = result?.data?.validationCreate?.validation;
+  const errors: { message?: string }[] = result?.data?.validationCreate?.userErrors ?? [];
   if (errors.some((e) => /shopify plus/i.test(e.message ?? ""))) {
     return null;
   }
   if (errors.length > 0) {
-    throw new Error(`Failed to create cart transform: ${JSON.stringify(errors)}`);
+    throw new Error(`Failed to create validation: ${JSON.stringify(errors)}`);
   }
-  if (!cartTransform?.id) {
-    throw new Error("Cart Transform was created without an ID");
+  if (!validation?.id) {
+    throw new Error("Validation was created without an ID");
   }
-  return cartTransform;
+  return validation;
 }
 
 /**
- * Delete this app's Validation object if one exists.
- *
- * The validation only guarded the retired "line" mode (a separate
- * deposit line added by the storefront script). In expand mode the Cart
- * Transform adds the deposit server-side, so there is nothing to enforce.
- */
-export async function deleteValidationIfPresent(shop: string, knownId?: string | null) {
-  const existingResult = await adminGraphql(GET_VALIDATIONS, {}, shop);
-  const nodes = existingResult?.data?.validations?.nodes ?? [];
-  const match = nodes.find(
-    (n: { id: string; title?: string }) =>
-      n.id === knownId || n.title === VALIDATION_TITLE,
-  );
-  if (!match) return null;
-
-  const result = await adminGraphql(DELETE_VALIDATION, { id: match.id }, shop);
-  const errors = result?.data?.validationDelete?.userErrors;
-  if (errors?.length > 0) {
-    throw new Error(`Failed to delete validation: ${JSON.stringify(errors)}`);
-  }
-  return match;
-}
-
-/**
- * Sync the deposit configuration to the Cart Transform's owner metafield.
+ * Sync the deposit configuration to the Validation's owner metafield.
  * Eligibility is not part of it — the Function reads each product's
- * $app:deposit.bottles metafield. `mode` is "expand" (deposit bundled
- * into the product line) wherever the Cart Transform could be activated.
+ * $app:deposit.bottles metafield. `mode` is "line": the deposit is a
+ * separate cart line, which the validation requires at checkout.
  */
 export async function syncFunctionMetafields(
   shop: string,
@@ -386,47 +385,40 @@ export async function fullSync(
   }
 
   try {
-    // Always verify the Cart Transform still exists in Shopify — it can be
-    // deleted when the app is reinstalled, leaving a stale ID. The store's
-    // plan decides the mode: Functions available → "expand" (charged
-    // server-side); refused (non-Plus + custom app) → "line" (the
-    // storefront script adds a separate deposit line).
-    const cartTransform = await getOrCreateCartTransform(shop, settings.cartTransformId);
-    const cartTransformId = cartTransform?.id ?? null;
-    const depositMode = cartTransform ? "expand" : "line";
-    if (cartTransformId && cartTransformId !== settings.cartTransformId) {
-      await log("create_cart_transform", "success", `Cart Transform ready: ${cartTransformId}`);
+    // Every store uses a separate deposit line (own price in cart and
+    // checkout). Remove the bundling Cart Transform from earlier versions.
+    const deletedTransforms = await deleteCartTransforms(shop);
+    if (deletedTransforms.length > 0) {
+      await log("delete_cart_transform", "success", `Deleted ${deletedTransforms.join(", ")}`);
     }
-    if (depositMode !== settings.depositMode) {
+
+    // Checkout check for the deposit line, where the plan allows Functions
+    const validation = await getOrCreateValidation(shop, settings.validationId);
+    const validationId = validation?.id ?? null;
+    if (validationId && validationId !== settings.validationId) {
+      await log("create_validation", "success", `Validation ready: ${validationId}`);
+    }
+    if (!validationId && settings.validationId !== null) {
       await log(
-        "deposit_mode",
-        "success",
-        depositMode === "line"
-          ? "Store plan can't run Functions from a custom app — using a separate deposit line"
-          : "Cart Transform active — deposit bundled into product lines",
+        "create_validation",
+        "warning",
+        "Store plan can't run Functions from a custom app — deposit line is storefront-only",
       );
     }
 
-    // No validation in either mode (expand needs none; on non-Plus stores
-    // Shopify refuses it too) — remove one left from earlier versions
-    const deletedValidation = await deleteValidationIfPresent(shop, settings.validationId);
-    if (deletedValidation) {
-      await log("delete_validation", "success", `Validation deleted: ${deletedValidation.id}`);
-    }
-
     if (
-      cartTransformId !== settings.cartTransformId ||
-      depositMode !== settings.depositMode ||
-      settings.validationId
+      settings.depositMode !== "line" ||
+      settings.cartTransformId ||
+      validationId !== settings.validationId
     ) {
       settings = await prisma.depositSettings.update({
         where: { shopId: shop },
-        data: { cartTransformId, depositMode, validationId: null },
+        data: { depositMode: "line", cartTransformId: null, validationId },
       });
     }
 
-    if (cartTransformId) {
-      await syncFunctionMetafields(shop, [cartTransformId], {
+    if (validationId) {
+      await syncFunctionMetafields(shop, [validationId], {
         enabled: depositActive,
         depositMode: settings.depositMode,
         amountMinor: settings.amountMinor,

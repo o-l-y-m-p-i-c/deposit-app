@@ -36,8 +36,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
       hasDepositProduct: !!settings.depositProductId,
-      hasCartTransform: !!settings.cartTransformId,
-      depositMode: settings.depositMode,
+      hasCheckoutCheck: !!settings.validationId,
       lastSyncedAt: settings.lastSyncedAt,
     },
     includeCount,
@@ -48,7 +47,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export default function Index() {
   const { settings } = useLoaderData<typeof loader>();
   const deposit = formatMoney(settings.amountMinor, settings.currencyCode);
-  const lineMode = settings.depositMode === "line";
 
   return (
     <Page title="Bottle Deposit App" subtitle="Add returnable bottle deposits to eligible products">
@@ -63,9 +61,7 @@ export default function Index() {
                 <Text as="p" tone="subdued">
                   {`This app adds a bottle deposit (${deposit} per bottle) to eligible products. `}
                   {`The deposit appears next to the price as "+ ${deposit} per bottle" and is `}
-                  {lineMode
-                    ? "added to the cart as a separate deposit line."
-                    : "bundled into each product line in the cart."}
+                  added to the cart as a separate deposit line with its own price.
                 </Text>
               </BlockStack>
             </Card>
@@ -95,11 +91,7 @@ export default function Index() {
                     <Text as="p">1. Select tags or collections for deposit</Text>
                     <Text as="p">2. Exclude specific tags or collections if needed</Text>
                     <Text as="p">3. Deposit appears next to price on storefront</Text>
-                    <Text as="p">
-                      {lineMode
-                        ? "4. A separate deposit line is added to the cart"
-                        : "4. The deposit is bundled into each product line in the cart"}
-                    </Text>
+                    <Text as="p">4. A separate deposit line is added to the cart</Text>
                     <Text as="p">5. Deposit is included in checkout and order total</Text>
                   </BlockStack>
                 </BlockStack>

@@ -78,8 +78,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       currencyCode: settings.currencyCode,
       depositProductId: settings.depositProductId,
       depositVariantId: settings.depositVariantId,
-      cartTransformId: settings.cartTransformId,
-      depositMode: settings.depositMode,
+      validationId: settings.validationId,
       lastSyncedAt: settings.lastSyncedAt,
     },
     includeTags,
@@ -395,19 +394,18 @@ export default function SettingsPage() {
                     <Text tone="subdued" as="p">
                       This text appears next to prices on the storefront.
                     </Text>
-                    {data.settings.depositMode === "line" ? (
+                    <Text tone="subdued" as="p">
+                      In the cart and checkout the deposit is a separate "Bottle Deposit" line with
+                      its own price, linked to each product ("Deposit for: …"). Keep the "Deposit
+                      Price Display" app embed on — it adds and updates that line.
+                    </Text>
+                    {!data.settings.validationId && data.settings.lastSyncedAt && (
                       <Banner tone="warning">
-                        This store's plan can't run Shopify Functions from a custom app, so the
-                        deposit is added as a separate cart line by the storefront script. Keep the
-                        "Deposit Price Display" app embed on. "Buy it now" and express checkout
-                        buttons skip the cart and won't add the deposit — consider turning off
-                        dynamic checkout buttons for deposit products in your theme settings.
+                        This store's plan can't run Shopify Functions from a custom app, so checkout
+                        can't verify the deposit line. "Buy it now" and express checkout buttons
+                        skip the cart and won't add the deposit — consider turning off dynamic
+                        checkout buttons for deposit products in your theme settings.
                       </Banner>
-                    ) : (
-                      <Text tone="subdued" as="p">
-                        In the cart and checkout the deposit is bundled into each product line,
-                        titled "… (incl. deposit)", on any theme.
-                      </Text>
                     )}
                   </BlockStack>
                 </Card>
@@ -416,13 +414,9 @@ export default function SettingsPage() {
                   <Badge tone={data.settings.depositProductId ? "success" : "attention"}>
                     {`Deposit product: ${data.settings.depositProductId ? "Created" : "Not created"}`}
                   </Badge>
-                  <Badge tone={data.settings.cartTransformId ? "success" : "info"}>
-                    {`Cart Transform: ${
-                      data.settings.cartTransformId
-                        ? "Active"
-                        : data.settings.depositMode === "line"
-                          ? "Not available on this plan"
-                          : "Not created"
+                  <Badge tone={data.settings.validationId ? "success" : "info"}>
+                    {`Checkout check: ${
+                      data.settings.validationId ? "Active" : "Not available on this plan"
                     }`}
                   </Badge>
                   {data.settings.lastSyncedAt && (
@@ -515,20 +509,11 @@ export default function SettingsPage() {
                       trial_expired: "Trial ended",
                     }[data.billingReason],
                   ],
-                  [
-                    "Cart mode",
-                    data.settings.depositMode === "line"
-                      ? "Separate deposit line (storefront script)"
-                      : "Bundled into product line",
-                  ],
+                  ["Cart", "Separate deposit line"],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
                   [
-                    "Cart Transform",
-                    data.settings.cartTransformId
-                      ? "Active"
-                      : data.settings.depositMode === "line"
-                        ? "Not available on this plan"
-                        : "Pending",
+                    "Checkout check",
+                    data.settings.validationId ? "Active" : "Not available on this plan",
                   ],
                   ["Last sync", data.settings.lastSyncedAt ? new Date(data.settings.lastSyncedAt).toLocaleString() : "Never"],
                 ]}
@@ -608,7 +593,7 @@ export default function SettingsPage() {
             <BlockStack gap="200">
               <InlineStack gap="200" blockAlign="center">
                 <Badge tone="critical">1</Badge>
-                <Text as="span">Cart Transform — stops the deposit Function from running</Text>
+                <Text as="span">Checkout check — stops the deposit Function from running</Text>
               </InlineStack>
               <InlineStack gap="200" blockAlign="center">
                 <Badge tone="critical">2</Badge>
