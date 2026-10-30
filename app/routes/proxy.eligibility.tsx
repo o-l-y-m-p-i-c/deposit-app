@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { prisma } from "~/db.server";
+import { hasBillingAccess } from "~/models/billing.server";
 import { authenticate } from "~/shopify.server";
 
 const MAX_IDS = 250;
@@ -31,7 +32,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ].slice(0, MAX_IDS);
 
   const products: Record<string, number> = Object.fromEntries(ids.map((id) => [id, 0]));
-  if (shop && ids.length > 0) {
+  // After the trial without a subscription: no deposit, no labels — even
+  // before the hourly sweep re-syncs the storefront config
+  if (shop && ids.length > 0 && (await hasBillingAccess(shop))) {
     const rows = await prisma.depositProduct.findMany({
       where: { shopId: shop, productId: { in: ids } },
       select: { productId: true, bottles: true },

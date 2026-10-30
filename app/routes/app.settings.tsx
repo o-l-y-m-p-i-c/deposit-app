@@ -31,13 +31,15 @@ import {
   GET_COLLECTIONS,
   GET_PRODUCT_TAGS,
 } from "~/lib/admin-api.server";
-import { getInstallation, requireSubscription } from "~/lib/billing.server";
+import { getBillingAccess } from "~/lib/billing.server";
+import { syncBilling } from "~/models/billing.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await requireSubscription(request);
+  // Billing gate: the /app layout loader redirects to Billing without access
+  const { session } = await authenticate.admin(request);
   const settings = await getSettings(session.shop);
   const rules = await getRules(session.shop);
-  const installation = await getInstallation(session.shop);
+  const access = getBillingAccess(await syncBilling(session.shop));
   const depositProductCount = await prisma.depositProduct.count({
     where: { shopId: session.shop },
   });
@@ -87,7 +89,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     availableTags,
     collections,
     depositProductCount,
-    testSubscription: installation.testSubscription,
+    billingReason: access.reason,
+    trialDaysLeft: access.trialDaysLeft,
   });
 }
 
@@ -95,12 +98,12 @@ export async function action({ request }: ActionFunctionArgs) {
   const body = await request.formData();
   const intent = body.get("intent") as string;
 
-  // Cleanup before uninstall stays possible without a subscription;
-  // everything else needs one
-  const { session } =
-    intent === "cleanup"
-      ? await authenticate.admin(request)
-      : await requireSubscription(request);
+  const { session } = await authenticate.admin(request);
+  // Cleanup before uninstall stays possible after the trial; changes
+  // that sync the deposit need access (actions skip the layout loader)
+  if (intent !== "cleanup" && !getBillingAccess(await syncBilling(session.shop)).hasAccess) {
+    return json({ error: "Your free trial has ended. Subscribe on the Billing page." }, { status: 402 });
+  }
 
   if (intent === "updateSettings") {
     const enabled = body.get("enabled") === "true";
@@ -505,7 +508,12 @@ export default function SettingsPage() {
                   ["Products with deposit", String(data.depositProductCount)],
                   [
                     "Plan",
-                    `€9.99 / month${data.testSubscription ? " (test charge)" : ""}`,
+                    {
+                      dev_store: "Development store — free",
+                      subscribed: "Subscribed",
+                      trial: `Free trial · ${data.trialDaysLeft} day(s) left`,
+                      trial_expired: "Trial ended",
+                    }[data.billingReason],
                   ],
                   [
                     "Cart mode",

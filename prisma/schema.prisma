@@ -92,3 +92,46 @@ model DepositProduct {
 
   @@id([shopId, productId])
 }
+
+// Billing state per shop — cached so storefront requests (app proxy) and
+// the hourly access sweep can check access without the Admin API.
+model ShopBilling {
+  id                 Int       @id @default(autoincrement())
+  shopId             String    @unique
+  trialStartedAt     DateTime  @default(now()) // copied from ShopTrial
+  isDevStore         Boolean   @default(false)
+  subscriptionId     String?   // active Shopify AppSubscription GID
+  subscriptionStatus String?   // ACTIVE | PENDING | CANCELLED | ...
+  currentPeriodEnd   DateTime?
+  lastSyncedAt       DateTime?
+  syncedAccess       Boolean?  // access state the deposit config was last synced with
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+// Trial start per shop. Never deleted on uninstall, so reinstalling the
+// app doesn't grant a second free trial.
+model ShopTrial {
+  shopId         String   @id
+  trialStartedAt DateTime @default(now())
+  devStore       Boolean  @default(false) // last known development-store status
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Shopify app subscriptions (charges) the shop has created
+model BillingSubscription {
+  id               String    @id // Shopify AppSubscription GID
+  shopId           String
+  name             String
+  status           String
+  test             Boolean   @default(false)
+  trialDays        Int       @default(0)
+  amount           Int       // in cents
+  currencyCode     String
+  createdAt        DateTime
+  currentPeriodEnd DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  @@index([shopId])
+}

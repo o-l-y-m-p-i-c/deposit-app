@@ -40,6 +40,7 @@ export default function App() {
       <NavMenu>
         <Link to="/" rel="home">Dashboard</Link>
         <Link to="/app/settings">Deposit Settings</Link>
+        <Link to="/app/billing">Billing</Link>
       </NavMenu>
       <Outlet />
     </ShopifyAppProvider>

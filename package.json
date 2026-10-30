@@ -12,7 +12,8 @@
     "shopify:deploy": "shopify app deploy",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "test": "vitest run app"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -36,7 +37,8 @@
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "typescript": "^5.5.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20.0.0"

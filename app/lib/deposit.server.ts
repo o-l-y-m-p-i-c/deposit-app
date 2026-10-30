@@ -19,7 +19,8 @@ import {
   UPDATE_DEPOSIT_VARIANT,
   UPDATE_PRODUCT_STATUS,
 } from "~/lib/admin-api.server";
-import { getInstallation } from "~/lib/billing.server";
+import { getBillingAccess } from "~/lib/billing.server";
+import { syncBilling } from "~/models/billing.server";
 import { syncEligibility } from "~/lib/eligibility.server";
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
@@ -330,12 +331,13 @@ export async function fullSync(
   const log = (operation: string, status: string, message: string) =>
     prisma.syncLog.create({ data: { shopId: shop, operation, status, message } });
 
-  const installation = await getInstallation(shop);
-  const appInstallationId = installation.id;
-  // What the storefront and Functions actually see
-  const depositActive = settings.enabled && installation.subscribed;
-  if (settings.enabled && !installation.subscribed) {
-    await log("billing", "warning", "No active subscription — deposit synced as disabled");
+  const appInstallationId = await getAppInstallationId(shop);
+  // What the storefront and Functions actually see: off once the trial
+  // ended without a subscription, whatever the setting says
+  const { hasAccess } = getBillingAccess(await syncBilling(shop));
+  const depositActive = settings.enabled && hasAccess;
+  if (settings.enabled && !hasAccess) {
+    await log("billing", "warning", "Trial ended without a subscription — deposit synced as disabled");
   }
 
   try {
@@ -456,7 +458,64 @@ export async function fullSync(
     where: { shopId: shop },
     data: { lastSyncedAt: new Date() },
   });
+  await prisma.shopBilling.update({
+    where: { shopId: shop },
+    data: { syncedAccess: hasAccess },
+  });
   return settings;
+}
+
+const CURRENT_INSTALLATION = /* GraphQL */ `#graphql
+  query DepositCurrentInstallation {
+    currentAppInstallation { id }
+  }
+`;
+
+/** Owner of the storefront display-config metafield. */
+async function getAppInstallationId(shop: string) {
+  const result = await adminGraphql(CURRENT_INSTALLATION, {}, shop);
+  const id = result?.data?.currentAppInstallation?.id;
+  if (!id) throw new Error("Current app installation ID is unavailable");
+  return id as string;
+}
+
+/**
+ * Re-sync the deposit config when billing access changed since the last
+ * sync (trial ended, subscription approved or cancelled). No-op for shops
+ * that were never set up.
+ */
+export async function syncDepositAccess(shop: string, { force = false } = {}) {
+  const billing = await syncBilling(shop, { force });
+  const { hasAccess } = getBillingAccess(billing);
+  if (billing.syncedAccess === hasAccess) return;
+  const settings = await prisma.depositSettings.findUnique({ where: { shopId: shop } });
+  if (!settings?.lastSyncedAt) return;
+  await fullSync(shop);
+}
+
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Trials end by time, not by any Shopify event — check hourly (from the
+ * cached state, no API calls) and switch the deposit off for shops whose
+ * access ran out. Started once per server process.
+ */
+export function startBillingSweep() {
+  const g = globalThis as unknown as { depositBillingSweep?: NodeJS.Timeout };
+  if (g.depositBillingSweep) return;
+  const sweep = async () => {
+    const rows = await prisma.shopBilling.findMany({ where: { syncedAccess: { not: null } } });
+    for (const row of rows) {
+      if (getBillingAccess(row).hasAccess === row.syncedAccess) continue;
+      await syncDepositAccess(row.shopId).catch((e) =>
+        console.error(`[billing sweep] ${row.shopId}:`, e),
+      );
+    }
+  };
+  g.depositBillingSweep = setInterval(() => {
+    sweep().catch((e) => console.error("[billing sweep]", e));
+  }, SWEEP_INTERVAL_MS);
+  g.depositBillingSweep.unref?.();
 }
 
 /**

@@ -11,12 +11,18 @@ import {
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Link as RemixLink } from "@remix-run/react";
-import { requireSubscription } from "~/lib/billing.server";
+import { getBillingAccess } from "~/lib/billing.server";
+import { syncBilling } from "~/models/billing.server";
+import { authenticate } from "~/shopify.server";
 import { getSettings } from "~/models/settings.server";
 import { getRules } from "~/models/rules.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await requireSubscription(request);
+  const { session, redirect } = await authenticate.admin(request);
+  // The dashboard sits outside the /app layout — same billing gate
+  if (!getBillingAccess(await syncBilling(session.shop)).hasAccess) {
+    throw redirect("/app/billing");
+  }
   const settings = await getSettings(session.shop);
   const rules = await getRules(session.shop);
 

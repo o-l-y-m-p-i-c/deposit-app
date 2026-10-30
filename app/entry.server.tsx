@@ -4,7 +4,11 @@ import { createReadableStreamFromReadable } from "@remix-run/node";
 import { RemixServer } from "@remix-run/react";
 import { isbot } from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
+import { startBillingSweep } from "~/lib/deposit.server";
 import shopify from "~/shopify.server";
+
+// Hourly: switch the deposit off for shops whose trial ran out
+startBillingSweep();
 
 const ABORT_DELAY = 5_000;
 
