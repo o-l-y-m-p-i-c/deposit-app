@@ -646,8 +646,18 @@
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ updates: Object.fromEntries(keys.map((k) => [k, 0])) }),
       });
-      // Show the corrected cart (quantities and totals changed)
-      if (res.ok && /\/cart\/?$/.test(window.location.pathname)) window.location.reload();
+      // Show the corrected cart in place. Self-contained: with the deposit
+      // disabled the script stops before the cart UI helpers exist.
+      if (res.ok) {
+        const cart = await res.json();
+        const detail = { cart, resource: cart, sourceId: "deposit-sync", data: { source: "deposit-sync", itemCount: cart.item_count } };
+        for (const name of ["cart:update", "cart:updated", "cart:refresh", "cart:build", "cart:change"]) {
+          document.dispatchEvent(new CustomEvent(name, { bubbles: true, detail }));
+        }
+        if (typeof window.publish === "function") {
+          window.publish(window.PUB_SUB_EVENTS?.cartUpdate || "cart-update", { source: "deposit-sync", cartData: cart });
+        }
+      }
     } catch (e) {}
   }
 
