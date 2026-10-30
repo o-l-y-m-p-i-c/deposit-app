@@ -24,7 +24,7 @@
  * Two deposit styles:
  *   "shared"      — one deposit product (depositVariantId); a drink needs
  *                   quantity × bottles of it
- *   "per_product" — each drink has its own "Deposit – <drink>" product
+ *   "per_product" — each drink has its own deposit variant ("Drink: <title>")
  *                   ($app:deposit.deposit_variant, priced per unit incl.
  *                   all bottles); a drink needs quantity of it
  * Lines are compared per deposit variant.
@@ -104,7 +104,7 @@ export function cartValidationsGenerateRun(input) {
 
     const ownDeposit = parseInt(product.depositVariant?.value ?? "", 10);
     if (perProduct && ownDeposit > 0) {
-      // Its own deposit product is priced for all bottles of one unit
+      // Its own deposit variant is priced for all bottles of one unit
       add(expected, `gid://shopify/ProductVariant/${ownDeposit}`, line.quantity);
     } else {
       add(expected, config.depositVariantId, line.quantity * bottles);

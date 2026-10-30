@@ -260,7 +260,11 @@ export async function recomputeProduct(shop: string, productGid: string, rules: 
   const product = result?.data?.product;
 
   let eligible = false;
-  if (product) {
+  // Deposit products (tagged by the app) never carry a deposit themselves
+  const isDepositProduct = (product?.tags ?? []).some((t: string) =>
+    ["bottle-deposit", "bottle-deposit-item"].includes(t.toLowerCase()),
+  );
+  if (product && !isDepositProduct) {
     const tags = new Set<string>((product.tags ?? []).map((t: string) => t.toLowerCase()));
     const collections = new Set<string>(
       (product.collections?.nodes ?? []).map((c: { id: string }) => c.id),

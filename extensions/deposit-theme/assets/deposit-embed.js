@@ -134,7 +134,7 @@
   const priceSelector = String(themeSettings.priceSelector || "").trim();
 
   const DEPOSIT_VARIANT_ID = Number(config.depositVariantId) || null;
-  // "per_product": each drink has its own "Deposit – <drink>" product,
+  // "per_product": each drink has its own deposit variant ("Drink: <title>"),
   // priced for all its bottles; otherwise one shared deposit product
   const PER_PRODUCT = config.style === "per_product";
 
@@ -260,7 +260,7 @@
 
   /**
    * Properties for a deposit line linked to a product variant. A drink's
-   * own deposit product names the drink in its title already.
+   * own deposit variant names the drink already ("Drink: <title>").
    */
   function depositProps(vid) {
     const props = { _deposit_for: String(vid) };

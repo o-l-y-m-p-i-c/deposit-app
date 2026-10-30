@@ -398,8 +398,8 @@ export async function fullSync(
   }
 
   try {
-    // "per_product": a "Deposit – <drink>" product per flagged drink;
-    // "shared": archives any left from per_product
+    // "per_product": a variant per flagged drink on one deposit product;
+    // "shared": unlinks them and archives that product
     const result = await syncDepositItems(shop, {
       style: settings.depositStyle,
       amountMinor: settings.amountMinor,
@@ -409,7 +409,7 @@ export async function fullSync(
       await log(
         "sync_deposit_items",
         "success",
-        `Deposit products: +${result.created} new, ${result.updated} updated, ${result.archived} archived`,
+        `Deposit variants: +${result.created} new, ${result.updated} updated, ${result.archived} removed/unlinked`,
       );
     }
   } catch (error) {
@@ -622,7 +622,7 @@ export async function cleanupShop(shop: string) {
     }
   }
 
-  // 4. Archive per-drink deposit products (kept for past orders)
+  // 4. Unlink per-drink deposit variants, archive their product
   try {
     await syncDepositItems(shop, { style: "shared", amountMinor: 0 });
   } catch (error) {

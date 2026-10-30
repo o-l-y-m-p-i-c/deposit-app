@@ -395,10 +395,10 @@ export default function SettingsPage() {
                         'A "Bottle Deposit" line per drink, linked by a "Deposit for: <drink>" note.',
                     },
                     {
-                      label: "A deposit product per drink",
+                      label: "A deposit variant per drink",
                       value: "per_product",
                       helpText:
-                        'The app creates "Deposit – <drink>" products; the line title shows the drink. Takes a moment on first sync.',
+                        'One "Bottle Deposit" product with a variant per drink ("Drink: <title>"), priced for its bottles. Takes a moment on first sync.',
                     },
                   ]}
                   selected={[depositStyle]}
@@ -428,7 +428,7 @@ export default function SettingsPage() {
                     </Text>
                     <Text tone="subdued" as="p">
                       {data.settings.depositStyle === "per_product"
-                        ? 'In the cart and checkout each drink gets its own "Deposit – <drink>" line with its own price.'
+                        ? 'In the cart and checkout each drink gets its own "Bottle Deposit — Drink: <title>" line with its own price.'
                         : 'In the cart and checkout the deposit is a separate "Bottle Deposit" line with its own price, linked to each drink ("Deposit for: …").'}{" "}
                       Keep the "Deposit Price Display" app embed on — it adds and updates that line.
                     </Text>
@@ -545,7 +545,7 @@ export default function SettingsPage() {
                   [
                     "Cart",
                     data.settings.depositStyle === "per_product"
-                      ? "Deposit product per drink"
+                      ? "Deposit variant per drink"
                       : "Shared deposit product",
                   ],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
