@@ -142,15 +142,6 @@
   const productCache = new Map();
   // Cache of product ID -> Promise<deposit units> (0 = no deposit)
   const bottlesCache = new Map();
-  // Server-rendered seeds (current product, cart lines) — positive only
-  try {
-    const seeds = JSON.parse(
-      document.getElementById("deposit-bottles")?.textContent || "{}",
-    );
-    for (const [id, bottles] of Object.entries(seeds)) {
-      if (Number(bottles) > 0) bottlesCache.set(String(id), Promise.resolve(Number(bottles)));
-    }
-  } catch (e) {}
   // Product ID -> its own deposit variant ID (per_product style), from
   // the Liquid seed and the eligibility proxy
   const depositVariantByProduct = new Map();
@@ -162,6 +153,22 @@
       if (Number(variant) > 0) depositVariantByProduct.set(String(id), Number(variant));
     }
   } catch (e) {}
+  // Server-rendered seeds (current product, cart lines) — positive only.
+  // Per-drink style: a seed without the drink's deposit link is skipped,
+  // so the proxy supplies both (bottles alone would pick the wrong product)
+  try {
+    const seeds = JSON.parse(
+      document.getElementById("deposit-bottles")?.textContent || "{}",
+    );
+    for (const [id, bottles] of Object.entries(seeds)) {
+      if (!(Number(bottles) > 0)) continue;
+      if (PER_PRODUCT && !depositVariantByProduct.has(String(id))) continue;
+      bottlesCache.set(String(id), Promise.resolve(Number(bottles)));
+    }
+  } catch (e) {}
+  // Product variant -> deposit variant seen on its linked cart line
+  // (fallback when neither seed nor proxy named the drink's deposit)
+  const depositVariantSeenFor = new Map();
   // Variant IDs known to be deposit products (row detection, counting)
   const depositVariantIds = new Set(DEPOSIT_VARIANT_ID ? [DEPOSIT_VARIANT_ID] : []);
   depositVariantByProduct.forEach((v) => depositVariantIds.add(v));
@@ -204,7 +211,9 @@
   /** The deposit variant a product variant's deposit line should use. */
   function depositVariantFor(vid) {
     if (PER_PRODUCT) {
-      const own = depositVariantByProduct.get(String(productOfVariant.get(vid)));
+      const own =
+        depositVariantByProduct.get(String(productOfVariant.get(vid))) ||
+        depositVariantSeenFor.get(vid);
       if (own) return own;
     }
     return DEPOSIT_VARIANT_ID;
@@ -228,6 +237,9 @@
       if (isDepositLine(item)) {
         const forVid = Number(item.properties?._deposit_for);
         if (forVid) depositKeyFor.set(forVid, item.key);
+        if (forVid && item.variant_id !== DEPOSIT_VARIANT_ID) {
+          depositVariantSeenFor.set(forVid, item.variant_id);
+        }
         depositVariantIds.add(item.variant_id);
         if (item.handle) depositHandles.add(item.handle);
       } else {

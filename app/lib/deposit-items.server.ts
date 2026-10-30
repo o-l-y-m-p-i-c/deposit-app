@@ -56,6 +56,40 @@ const ARCHIVE_DEPOSIT_ITEM = /* GraphQL */ `#graphql
   }
 `;
 
+const CREATE_LINK_DEFINITION = /* GraphQL */ `#graphql
+  mutation DepositVariantLinkDefinition($definition: MetafieldDefinitionInput!) {
+    metafieldDefinitionCreate(definition: $definition) {
+      createdDefinition { id }
+      userErrors { field message code }
+    }
+  }
+`;
+
+/**
+ * Storefront read access for the drink → deposit variant link, so the
+ * theme (Liquid) can pass it to the storefront script. Without it the
+ * script can't tell which deposit product belongs to a drink.
+ */
+async function ensureLinkDefinition(shop: string) {
+  const result = await adminGraphql(CREATE_LINK_DEFINITION, {
+    definition: {
+      name: "Deposit product variant",
+      description: "This drink's own deposit product (managed by the Bottle Deposit app)",
+      namespace: DEPOSIT_NAMESPACE,
+      key: DEPOSIT_VARIANT_KEY,
+      type: "number_integer",
+      ownerType: "PRODUCT",
+      access: { storefront: "PUBLIC_READ" },
+    },
+  }, shop);
+  const errors: { code?: string; message: string }[] =
+    result?.data?.metafieldDefinitionCreate?.userErrors ?? [];
+  const real = errors.filter((e) => e.code !== "TAKEN");
+  if (real.length > 0) {
+    throw new Error(`Failed to create deposit link definition: ${JSON.stringify(real)}`);
+  }
+}
+
 const DELETE_DEPOSIT_VARIANT_LINK = /* GraphQL */ `#graphql
   mutation DepositVariantLinkDelete($metafields: [MetafieldIdentifierInput!]!) {
     metafieldsDelete(metafields: $metafields) {
@@ -155,6 +189,7 @@ export async function syncDepositItems(
     force = false,
   }: { style: string; amountMinor: number; onlyProductIds?: string[]; force?: boolean },
 ) {
+  if (style === "per_product" && !onlyProductIds) await ensureLinkDefinition(shop);
   const scope = onlyProductIds ? { in: onlyProductIds } : undefined;
   const flagged =
     style === "per_product"
