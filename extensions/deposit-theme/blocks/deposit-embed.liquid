@@ -31,23 +31,23 @@
     document.documentElement.classList.add("deposit-ready");
   }, 4000);
 </script>
-<style>
-  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"],
-  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ cart-remove-button,
-  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ .quantity-popover__info-button,
-  quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"] ~ .cart-items__info,
-  .quantity-popover-container:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
-  quantity-popover:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
-  .quantity-popover-wrapper:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]),
-  tr:has(quantity-input[data-quantity-variant-id="{{ deposit_config.depositVariantId }}"]) cart-remove-button
+{%- comment -%}
+  Deposit variants in this cart: the shared one plus any per-drink
+  deposit line (linked by _deposit_for). Dawn puts
+  data-quantity-variant-id on the quantity <input> (newer versions) or
+  on <quantity-input> (older ones) — match the row either way.
+{%- endcomment -%}
+{%- capture deposit_ids -%}
+  {{- deposit_config.depositVariantId -}}
   {%- for item in cart.items -%}
-    {%- if item.properties._deposit_for and item.variant_id != deposit_config.depositVariantId -%},
-  quantity-input[data-quantity-variant-id="{{ item.variant_id }}"],
-  quantity-input[data-quantity-variant-id="{{ item.variant_id }}"] ~ cart-remove-button,
-  .quantity-popover-container:has(quantity-input[data-quantity-variant-id="{{ item.variant_id }}"]),
-  quantity-popover:has(quantity-input[data-quantity-variant-id="{{ item.variant_id }}"]),
-  tr:has(quantity-input[data-quantity-variant-id="{{ item.variant_id }}"]) cart-remove-button
-    {%- endif -%}
+    {%- if item.properties._deposit_for -%},{{ item.variant_id }}{%- endif -%}
+  {%- endfor -%}
+{%- endcapture -%}
+{%- assign deposit_ids = deposit_ids | split: "," | uniq -%}
+<style>
+  {%- for id in deposit_ids %}
+  .cart-item:has([data-quantity-variant-id="{{ id }}"]) :is(quantity-popover, quantity-input, cart-remove-button, .quantity-popover-container)
+    {%- unless forloop.last -%},{%- endunless -%}
   {%- endfor %} {
     display: none !important;
   }

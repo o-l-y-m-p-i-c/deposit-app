@@ -987,14 +987,7 @@
     // the row — no flash even when the theme re-renders the section.
     // Sibling selectors (~) cover browsers without :has() support.
     style.textContent = `
-      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"],
-      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"] ~ cart-remove-button,
-      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"] ~ .quantity-popover__info-button,
-      quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"] ~ .cart-items__info,
-      .quantity-popover-container:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
-      quantity-popover:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
-      .quantity-popover-wrapper:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]),
-      tr:has(quantity-input[data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) cart-remove-button,
+      .cart-item:has([data-quantity-variant-id="${DEPOSIT_VARIANT_ID}"]) :is(quantity-popover, quantity-input, cart-remove-button, .quantity-popover-container),
       .deposit-line-locked quantity-input,
       .deposit-line-locked quantity-popover,
       .deposit-line-locked quantity-popover-container,
@@ -1115,7 +1108,13 @@
    * skips the /cart.js roundtrip for the sync.
    */
   async function updatePrices(cartOverride) {
-    if (isUpdating) return;
+    if (isUpdating) {
+      // Never drop a trigger (e.g. the theme's own quantity change landing
+      // mid-update) — re-run once this pass ends, re-reading /cart.js so
+      // the deposit follows the latest quantities
+      pendingUpdate = true;
+      return;
+    }
     isUpdating = true;
 
     try {
