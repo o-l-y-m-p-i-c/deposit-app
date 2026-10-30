@@ -6,7 +6,7 @@
   "scripts": {
     "build": "remix vite:build",
     "dev": "remix vite:dev",
-    "start": "prisma migrate deploy && cross-env NODE_ENV=production remix-serve ./build/server/index.js",
+    "start": "DATABASE_URL=\"${DATABASE_URL_UNPOOLED:-$DATABASE_URL}\" prisma migrate deploy && cross-env NODE_ENV=production remix-serve ./build/server/index.js",
     "typecheck": "tsc --noEmit",
     "shopify:dev": "shopify app dev",
     "shopify:deploy": "shopify app deploy",

@@ -10,6 +10,10 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
+      # Neon direct (non-pooler) URL — used only by `prisma migrate deploy`,
+      # whose advisory lock times out through the pooler
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
       - key: SHOPIFY_API_KEY
         sync: false
       - key: SHOPIFY_API_SECRET
