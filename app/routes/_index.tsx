@@ -5,12 +5,13 @@ import {
   BlockStack,
   Text,
   Button,
-  Grid,
+  InlineGrid,
   Badge,
 } from "@shopify/polaris";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Link as RemixLink } from "@remix-run/react";
+import { useLoaderData } from "@remix-run/react";
+import { formatMoney } from "~/lib/money";
 import { getBillingAccess } from "~/lib/billing.server";
 import { syncBilling } from "~/models/billing.server";
 import { authenticate } from "~/shopify.server";
@@ -36,6 +37,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       currencyCode: settings.currencyCode,
       hasDepositProduct: !!settings.depositProductId,
       hasCartTransform: !!settings.cartTransformId,
+      depositMode: settings.depositMode,
       lastSyncedAt: settings.lastSyncedAt,
     },
     includeCount,
@@ -44,6 +46,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export default function Index() {
+  const { settings } = useLoaderData<typeof loader>();
+  const deposit = formatMoney(settings.amountMinor, settings.currencyCode);
+  const lineMode = settings.depositMode === "line";
+
   return (
     <Page title="Bottle Deposit App" subtitle="Add returnable bottle deposits to eligible products">
       <Layout>
@@ -55,48 +61,50 @@ export default function Index() {
                   Welcome! 
                 </Text>
                 <Text as="p" tone="subdued">
-                  This app automatically adds a bottle deposit (default: 0.10 EUR per bottle)
-                  to eligible products. The deposit appears next to the price as
-                  "price + 0.10Euro per bottle" and is added to the cart as a bundled component.
+                  {`This app adds a bottle deposit (${deposit} per bottle) to eligible products. `}
+                  {`The deposit appears next to the price as "+ ${deposit} per bottle" and is `}
+                  {lineMode
+                    ? "added to the cart as a separate deposit line."
+                    : "bundled into each product line in the cart."}
                 </Text>
               </BlockStack>
             </Card>
 
-            <Grid columns={{ xs: 1, sm: 2, md: 2 }}>
-              <Grid.Cell>
-                <Card>
-                  <BlockStack gap="300">
-                    <Text variant="headingMd" as="h3">
-                      Deposit Settings
-                    </Text>
-                    <Text as="p" tone="subdued">
-                      Edit the deposit amount, enable/disable the app, and configure
-                      which tags or collections get the deposit.
-                    </Text>
-                    <RemixLink to="/app/settings">
-                      <Button fullWidth>Configure Settings</Button>
-                    </RemixLink>
-                  </BlockStack>
-                </Card>
-              </Grid.Cell>
+            <InlineGrid columns={{ xs: 1, sm: 2 }} gap="400">
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h3">
+                    Deposit Settings
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Edit the deposit amount, enable/disable the app, and configure
+                    which tags or collections get the deposit.
+                  </Text>
+                  <Button fullWidth url="/app/settings">
+                    Configure Settings
+                  </Button>
+                </BlockStack>
+              </Card>
 
-              <Grid.Cell>
-                <Card>
-                  <BlockStack gap="300">
-                    <Text variant="headingMd" as="h3">
-                      How It Works
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h3">
+                    How It Works
+                  </Text>
+                  <BlockStack gap="200">
+                    <Text as="p">1. Select tags or collections for deposit</Text>
+                    <Text as="p">2. Exclude specific tags or collections if needed</Text>
+                    <Text as="p">3. Deposit appears next to price on storefront</Text>
+                    <Text as="p">
+                      {lineMode
+                        ? "4. A separate deposit line is added to the cart"
+                        : "4. The deposit is bundled into each product line in the cart"}
                     </Text>
-                    <BlockStack gap="200">
-                      <Text as="p">1. Select tags or collections for deposit</Text>
-                      <Text as="p">2. Exclude specific tags or collections if needed</Text>
-                      <Text as="p">3. Deposit appears next to price on storefront</Text>
-                      <Text as="p">4. Cart Transform adds deposit as a bundled component</Text>
-                      <Text as="p">5. Deposit is included in checkout and order total</Text>
-                    </BlockStack>
+                    <Text as="p">5. Deposit is included in checkout and order total</Text>
                   </BlockStack>
-                </Card>
-              </Grid.Cell>
-            </Grid>
+                </BlockStack>
+              </Card>
+            </InlineGrid>
 
             <Card>
               <BlockStack gap="300">
