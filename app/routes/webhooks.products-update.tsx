@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { prisma } from "~/db.server";
 import { getRulesGrouped } from "~/lib/deposit.server";
+import { syncBundlesInBackground } from "~/lib/bundles.server";
 import { syncDepositItems } from "~/lib/deposit-items.server";
 import { recomputeProduct } from "~/lib/eligibility.server";
 import { authenticate } from "~/shopify.server";
@@ -36,16 +37,25 @@ export async function action({ request }: ActionFunctionArgs) {
     // Not set up yet, or the deposit product itself — nothing to evaluate
     if (!settings || settings.depositProductId === productGid) return;
     const productId = productGid.split("/").pop()!;
-    // The per-drink deposit product (our own variant writes fire this too)
+    // The per-drink deposit product or a hidden bundle component (our own
+    // writes fire this too)
     if (await prisma.depositItem.findFirst({ where: { shopId: shop, productId } })) return;
+    if (await prisma.bundleItem.findFirst({ where: { shopId: shop, copyProductId: productId } })) return;
 
     const rules = await getRulesGrouped(shop);
     const before = await prisma.depositProduct.count({ where: { shopId: shop } });
     await recomputeProduct(shop, productGid, rules);
     // Per-drink style: create, rename or remove this drink's deposit variant
     await syncDepositItems(shop, {
-      style: settings.depositStyle,
+      style: settings.depositMethod === "bundling" ? "shared" : settings.depositStyle,
       amountMinor: settings.amountMinor,
+      onlyProductIds: [productId],
+    });
+    // Bundling: bundle, update (price edits, bottles) or unbundle this drink
+    await syncBundlesInBackground(shop, {
+      method: settings.depositMethod,
+      amountMinor: settings.amountMinor,
+      depositVariantId: settings.depositVariantId,
       onlyProductIds: [productId],
     });
     const after = await prisma.depositProduct.count({ where: { shopId: shop } });

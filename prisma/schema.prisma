@@ -47,6 +47,7 @@ model DepositSettings {
   validationId      String?  // Shopify validation GID
   depositMode       String   @default("expand") // set to "line" by every sync: the deposit is a separate cart line ("expand" bundling retired)
   depositStyle      String   @default("shared") // "shared" = one shared deposit variant | "per_product" = a variant per drink on one "Bottle Deposit" product
+  depositMethod     String   @default("linking") // "linking" = separate deposit cart line (see depositStyle) | "bundling" = each deposit drink is a native Shopify bundle (drink copy + deposit)
   bottleCountMode   String   @default("single") // "single" | "metafield"
   bottleCountKey    String?  // metafield key for bottle count, e.g. "bottles_per_unit"
   lastSyncedAt      DateTime?
@@ -152,4 +153,23 @@ model DepositItem {
   updatedAt       DateTime @updatedAt
 
   @@id([shopId, sourceProductId])
+}
+
+// A drink variant turned into a native Shopify bundle ("bundling" deposit
+// method): its stock moved to a hidden copy variant, and the visible
+// variant is a bundle of copy × 1 + deposit × depositUnits, priced
+// base + deposit. Kept to restore the drink when it is unbundled.
+model BundleItem {
+  shopId          String
+  parentVariantId String   // numeric ID of the visible drink variant
+  parentProductId String
+  copyProductId   String   // hidden "[bundle component]" copy
+  copyVariantId   String
+  basePriceMinor  Int      // drink price without deposit (= copy price)
+  depositUnits    Int
+  parentTracked   Boolean  // did the drink variant track stock before bundling
+  updatedAt       DateTime @updatedAt
+
+  @@id([shopId, parentVariantId])
+  @@index([shopId, parentProductId])
 }

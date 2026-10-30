@@ -473,15 +473,19 @@ const TAGGED_PRODUCT_IDS = /* GraphQL */ `#graphql
 `;
 
 /**
- * Numeric IDs of every deposit product — the per-drink variants product
- * and the retired "Deposit – <drink>" products (all tagged
- * bottle-deposit-item). They never carry a deposit themselves.
+ * Numeric IDs of every deposit product — the per-drink variants product,
+ * the retired "Deposit – <drink>" products (tag bottle-deposit-item) and
+ * hidden bundle components (tag bottle-deposit-component). They never
+ * carry a deposit themselves.
  */
 export async function depositItemProductIds(shop: string) {
   const ids = new Set<string>();
   let after: string | null = null;
   do {
-    const result = await adminGraphql(TAGGED_PRODUCT_IDS, { query: `tag:${DEPOSIT_ITEM_TAG}`, after }, shop);
+    const result = await adminGraphql(TAGGED_PRODUCT_IDS, {
+      query: `tag:${DEPOSIT_ITEM_TAG} OR tag:bottle-deposit-component`,
+      after,
+    }, shop);
     const page = result?.data?.products;
     for (const node of page?.nodes ?? []) ids.add(numericId(node.id));
     after = page?.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;

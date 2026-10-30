@@ -96,8 +96,13 @@
       .map((p) => p.value);
   } catch (e) {}
 
-  /** Label text for a product carrying `bottles` deposit units. */
+  /**
+   * Label text for a product carrying `bottles` deposit units. Bundling
+   * ("bundle" mode): the shown price already includes the deposit.
+   */
   function depositTextFor(bottles) {
+    const total = Math.round(depositNumber * Math.max(1, bottles) * 100) / 100;
+    if (config.mode === "bundle") return `incl. ${formatMoney(total)} deposit`;
     if (bottles > 1) {
       return `${formatMoney(Math.round(depositNumber * bottles * 100) / 100)} deposit (${bottles} bottles)`;
     }
@@ -462,7 +467,8 @@
     depositSpan.dataset.depositLabel = "true";
     depositSpan.style.cssText =
       "font-size: 0.85em; color: #666; margin-left: 4px; display: inline;";
-    depositSpan.textContent = "+ " + depositTextFor(bottles);
+    const text = depositTextFor(bottles);
+    depositSpan.textContent = config.mode === "bundle" ? text : "+ " + text;
 
     priceElement.after(depositSpan);
   }

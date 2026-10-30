@@ -124,7 +124,8 @@
 {%- endcomment -%}
 {%- capture deposit_leftovers -%}
   {%- for item in cart.items -%}
-    {%- if deposit_config.depositVariantId and item.variant_id == deposit_config.depositVariantId -%}{{ item.key | json }},{%- endif -%}
+    {%- if deposit_config.depositVariantId and item.variant_id == deposit_config.depositVariantId -%}{{ item.key | json }},
+    {%- elsif item.properties._deposit_for -%}{{ item.key | json }},{%- endif -%}
   {%- endfor -%}
 {%- endcapture -%}
 <script id="deposit-leftover-lines" type="application/json">[ {{- deposit_leftovers | strip | remove_last: "," -}} ]</script>

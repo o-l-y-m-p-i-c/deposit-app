@@ -33,6 +33,7 @@ import {
 } from "~/lib/admin-api.server";
 import { getBillingAccess } from "~/lib/billing.server";
 import { syncBilling } from "~/models/billing.server";
+import { bundleSyncRunning } from "~/lib/bundles.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   // Billing gate: the /app layout loader redirects to Billing without access
@@ -40,6 +41,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const settings = await getSettings(session.shop);
   const rules = await getRules(session.shop);
   const access = getBillingAccess(await syncBilling(session.shop));
+  const bundledDrinks = await prisma.bundleItem.groupBy({
+    by: ["parentProductId"],
+    where: { shopId: session.shop },
+  });
+  const lastBundleLog = await prisma.syncLog.findFirst({
+    where: { shopId: session.shop, operation: "sync_bundles" },
+    orderBy: { createdAt: "desc" },
+  });
   const depositProductCount = await prisma.depositProduct.count({
     where: { shopId: session.shop },
   });
@@ -80,6 +89,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       depositVariantId: settings.depositVariantId,
       validationId: settings.validationId,
       depositStyle: settings.depositStyle,
+      depositMethod: settings.depositMethod,
       lastSyncedAt: settings.lastSyncedAt,
     },
     includeTags,
@@ -89,6 +99,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     availableTags,
     collections,
     depositProductCount,
+    bundledDrinkCount: bundledDrinks.length,
+    bundleSyncRunning: bundleSyncRunning(session.shop),
+    lastBundleLog: lastBundleLog
+      ? { status: lastBundleLog.status, message: lastBundleLog.message, at: lastBundleLog.createdAt }
+      : null,
     billingReason: access.reason,
     trialDaysLeft: access.trialDaysLeft,
   });
@@ -115,8 +130,12 @@ export async function action({ request }: ActionFunctionArgs) {
     if (depositStyle !== "shared" && depositStyle !== "per_product") {
       return json({ error: "Invalid deposit style" }, { status: 400 });
     }
+    const depositMethod = body.get("depositMethod");
+    if (depositMethod !== "linking" && depositMethod !== "bundling") {
+      return json({ error: "Invalid deposit method" }, { status: 400 });
+    }
 
-    await updateSettings(session.shop, { enabled, amountMinor, depositStyle });
+    await updateSettings(session.shop, { enabled, amountMinor, depositStyle, depositMethod });
 
     // Trigger full sync
     try {
@@ -204,6 +223,7 @@ export default function SettingsPage() {
 
   const [enabled, setEnabled] = useState(data.settings.enabled);
   const [depositStyle, setDepositStyle] = useState(data.settings.depositStyle);
+  const [depositMethod, setDepositMethod] = useState(data.settings.depositMethod);
   const [amountEuros, setAmountEuros] = useState((data.settings.amountMinor / 100).toFixed(2));
   const [showAddModal, setShowAddModal] = useState(false);
   const [newRuleEffect, setNewRuleEffect] = useState("INCLUDE");
@@ -218,8 +238,9 @@ export default function SettingsPage() {
   useEffect(() => {
     setEnabled(data.settings.enabled);
     setDepositStyle(data.settings.depositStyle);
+    setDepositMethod(data.settings.depositMethod);
     setAmountEuros((data.settings.amountMinor / 100).toFixed(2));
-  }, [data.settings.enabled, data.settings.amountMinor, data.settings.depositStyle]);
+  }, [data.settings.enabled, data.settings.amountMinor, data.settings.depositStyle, data.settings.depositMethod]);
 
   const handleSaveSettings = useCallback(() => {
     const amountMinor = Math.round(parseFloat(amountEuros) * 100);
@@ -233,10 +254,11 @@ export default function SettingsPage() {
         enabled: String(enabled),
         amountMinor: String(amountMinor),
         depositStyle,
+        depositMethod,
       },
       { method: "post" },
     );
-  }, [amountEuros, enabled, depositStyle, fetcher]);
+  }, [amountEuros, enabled, depositStyle, depositMethod, fetcher]);
 
   const handleAddRule = useCallback(() => {
     let value = "";
@@ -386,24 +408,64 @@ export default function SettingsPage() {
                 />
 
                 <ChoiceList
-                  title="Deposit in the cart"
+                  title="How the deposit is added"
                   choices={[
                     {
-                      label: "One shared deposit product",
-                      value: "shared",
+                      label: "Product linking",
+                      value: "linking",
                       helpText:
-                        'A "Bottle Deposit" line per drink, linked by a "Deposit for: <drink>" note.',
+                        "The deposit is its own cart line with its own price, linked to the drink. Added and kept in sync by the storefront script.",
                     },
                     {
-                      label: "A deposit variant per drink",
-                      value: "per_product",
+                      label: "Bundling with deposit",
+                      value: "bundling",
                       helpText:
-                        'One "Bottle Deposit" product with a variant per drink ("Drink: <title>"), priced for its bottles. Takes a moment on first sync.',
+                        "Each deposit drink becomes a Shopify bundle (drink + deposit). Shopify keeps them together — also for Buy it now and express checkout.",
                     },
                   ]}
-                  selected={[depositStyle]}
-                  onChange={(selected) => setDepositStyle(selected[0])}
+                  selected={[depositMethod]}
+                  onChange={(selected) => setDepositMethod(selected[0])}
                 />
+
+                {depositMethod === "linking" ? (
+                  <ChoiceList
+                    title="Linked deposit line"
+                    choices={[
+                      {
+                        label: "One shared deposit product",
+                        value: "shared",
+                        helpText:
+                          'A "Bottle Deposit" line per drink, linked by a "Deposit for: <drink>" note.',
+                      },
+                      {
+                        label: "A deposit variant per drink",
+                        value: "per_product",
+                        helpText:
+                          'One "Bottle Deposit" product with a variant per drink ("Drink: <title>"), priced for its bottles. Takes a moment on first sync.',
+                      },
+                    ]}
+                    selected={[depositStyle]}
+                    onChange={(selected) => setDepositStyle(selected[0])}
+                  />
+                ) : (
+                  <Banner tone="warning" title="Bundling changes your catalog">
+                    <BlockStack gap="100">
+                      <Text as="p">
+                        Each deposit drink gets a hidden copy "[bundle component]" that holds its
+                        stock — manage stock on those copies while bundling is on.
+                      </Text>
+                      <Text as="p">
+                        The drink's price becomes drink + deposit (e.g. €2.15 → €2.25); edit that
+                        visible price as the price incl. deposit. In cart and checkout the deposit
+                        is listed under the drink without its own price.
+                      </Text>
+                      <Text as="p">
+                        Switching back to Product linking restores prices and stock and archives
+                        the copies. Bundling runs in the background and takes a few minutes.
+                      </Text>
+                    </BlockStack>
+                  </Banner>
+                )}
 
                 <TextField
                   label="Deposit amount per bottle"
@@ -427,12 +489,20 @@ export default function SettingsPage() {
                       This text appears next to prices on the storefront.
                     </Text>
                     <Text tone="subdued" as="p">
-                      {data.settings.depositStyle === "per_product"
-                        ? 'In the cart and checkout each drink gets its own "Bottle Deposit — Drink: <title>" line with its own price.'
-                        : 'In the cart and checkout the deposit is a separate "Bottle Deposit" line with its own price, linked to each drink ("Deposit for: …").'}{" "}
-                      Keep the "Deposit Price Display" app embed on — it adds and updates that line.
+                      {data.settings.depositMethod === "bundling"
+                        ? "In the cart and checkout each deposit drink is a bundle: the drink with the deposit listed underneath, priced together."
+                        : data.settings.depositStyle === "per_product"
+                          ? 'In the cart and checkout each drink gets its own "Bottle Deposit — Drink: <title>" line with its own price. Keep the "Deposit Price Display" app embed on — it adds and updates that line.'
+                          : 'In the cart and checkout the deposit is a separate "Bottle Deposit" line with its own price, linked to each drink ("Deposit for: …"). Keep the "Deposit Price Display" app embed on — it adds and updates that line.'}
                     </Text>
-                    {!data.settings.validationId && data.settings.lastSyncedAt && (
+                    {data.settings.depositMethod === "bundling" && (data.bundleSyncRunning || data.lastBundleLog) && (
+                      <Banner tone={data.bundleSyncRunning ? "info" : data.lastBundleLog?.status === "error" ? "critical" : "success"}>
+                        {data.bundleSyncRunning
+                          ? `Bundling in progress… ${data.bundledDrinkCount} drinks bundled so far. Refresh to update.`
+                          : `${data.bundledDrinkCount} drinks bundled. Last run: ${data.lastBundleLog?.message}`}
+                      </Banner>
+                    )}
+                    {data.settings.depositMethod === "linking" && !data.settings.validationId && data.settings.lastSyncedAt && (
                       <Banner tone="warning">
                         This store's plan can't run Shopify Functions from a custom app, so checkout
                         can't verify the deposit line. "Buy it now" and express checkout buttons
@@ -544,9 +614,11 @@ export default function SettingsPage() {
                   ],
                   [
                     "Cart",
-                    data.settings.depositStyle === "per_product"
-                      ? "Deposit variant per drink"
-                      : "Shared deposit product",
+                    data.settings.depositMethod === "bundling"
+                      ? `Bundles (${data.bundledDrinkCount} drinks)`
+                      : data.settings.depositStyle === "per_product"
+                        ? "Linked: deposit variant per drink"
+                        : "Linked: shared deposit product",
                   ],
                   ["Deposit product", data.settings.depositProductId ? "Created" : "Pending"],
                   [

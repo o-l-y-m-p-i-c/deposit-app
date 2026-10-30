@@ -262,7 +262,7 @@ export async function recomputeProduct(shop: string, productGid: string, rules: 
   let eligible = false;
   // Deposit products (tagged by the app) never carry a deposit themselves
   const isDepositProduct = (product?.tags ?? []).some((t: string) =>
-    ["bottle-deposit", "bottle-deposit-item"].includes(t.toLowerCase()),
+    ["bottle-deposit", "bottle-deposit-item", "bottle-deposit-component"].includes(t.toLowerCase()),
   );
   if (product && !isDepositProduct) {
     const tags = new Set<string>((product.tags ?? []).map((t: string) => t.toLowerCase()));

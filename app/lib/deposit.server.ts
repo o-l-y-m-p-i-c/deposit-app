@@ -21,6 +21,7 @@ import {
 } from "~/lib/admin-api.server";
 import { getBillingAccess } from "~/lib/billing.server";
 import { syncBilling } from "~/models/billing.server";
+import { syncBundles, syncBundlesInBackground } from "~/lib/bundles.server";
 import { depositItemProductIds, syncDepositItems } from "~/lib/deposit-items.server";
 import { syncEligibility } from "~/lib/eligibility.server";
 
@@ -400,8 +401,9 @@ export async function fullSync(
   try {
     // "per_product": a variant per flagged drink on one deposit product;
     // "shared": unlinks them and archives that product
+    // Bundling doesn't use deposit lines — unlink per-drink variants
     const result = await syncDepositItems(shop, {
-      style: settings.depositStyle,
+      style: settings.depositMethod === "bundling" ? "shared" : settings.depositStyle,
       amountMinor: settings.amountMinor,
       force,
     });
@@ -418,8 +420,12 @@ export async function fullSync(
   }
 
   try {
-    // Every store uses a separate deposit line (own price in cart and
-    // checkout). Remove the bundling Cart Transform from earlier versions.
+    // "line" = separate deposit cart line (linking); "bundle" = the drink
+    // is a native Shopify bundle with the deposit (bundling) — the
+    // storefront script and checkout check stay out of the cart then.
+    const depositMode = settings.depositMethod === "bundling" ? "bundle" : "line";
+
+    // Remove the Cart Transform from earlier versions (not used any more)
     const deletedTransforms = await deleteCartTransforms(shop);
     if (deletedTransforms.length > 0) {
       await log("delete_cart_transform", "success", `Deleted ${deletedTransforms.join(", ")}`);
@@ -440,13 +446,13 @@ export async function fullSync(
     }
 
     if (
-      settings.depositMode !== "line" ||
+      settings.depositMode !== depositMode ||
       settings.cartTransformId ||
       validationId !== settings.validationId
     ) {
       settings = await prisma.depositSettings.update({
         where: { shopId: shop },
-        data: { depositMode: "line", cartTransformId: null, validationId },
+        data: { depositMode, cartTransformId: null, validationId },
       });
     }
 
@@ -476,6 +482,15 @@ export async function fullSync(
       depositStyle: settings.depositStyle,
     });
     await log("sync_storefront", "success", "Storefront metafield synced");
+
+    // Bundling: turn deposit drinks into Shopify bundles; linking: undo
+    // any bundles. Minutes for many drinks — runs in the background and
+    // reports to the sync log.
+    void syncBundlesInBackground(shop, {
+      method: settings.depositMethod,
+      amountMinor: settings.amountMinor,
+      depositVariantId: settings.depositVariantId,
+    });
   } catch (error) {
     await log("sync_storefront", "error", String(error));
     throw error;
@@ -622,14 +637,25 @@ export async function cleanupShop(shop: string) {
     }
   }
 
-  // 4. Unlink per-drink deposit variants, archive their product
+  // 4. Undo bundles (drinks get their price and stock back)
+  try {
+    await syncBundles(shop, {
+      method: "linking",
+      amountMinor: settings?.amountMinor ?? 0,
+      depositVariantId: settings?.depositVariantId ?? null,
+    });
+  } catch (error) {
+    await log("unbundle", "warning", String(error));
+  }
+
+  // 5. Unlink per-drink deposit variants, archive their product
   try {
     await syncDepositItems(shop, { style: "shared", amountMinor: 0 });
   } catch (error) {
     await log("archive_deposit_items", "warning", String(error));
   }
 
-  // 5. Delete all rules and settings from the database
+  // 6. Delete all rules and settings from the database
   await prisma.depositRule.deleteMany({ where: { shopId: shop } });
   // Product metafields are app-owned and removed by Shopify on uninstall
   await prisma.depositProduct.deleteMany({ where: { shopId: shop } });

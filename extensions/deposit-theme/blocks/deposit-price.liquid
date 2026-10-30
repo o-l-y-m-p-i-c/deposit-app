@@ -18,11 +18,17 @@
         shop-currency amount with its code.
       {%- endcomment -%}
       {%- if cart.currency.iso_code == shop.currency -%}
-        + {{ deposit_minor | money }}
+        {%- capture deposit_money -%}{{ deposit_minor | money }}{%- endcapture -%}
       {%- else -%}
-        + {{ deposit_minor | divided_by: 100.0 | round: 2 }} {{ shop.currency }}
+        {%- capture deposit_money -%}{{ deposit_minor | divided_by: 100.0 | round: 2 }} {{ shop.currency }}{%- endcapture -%}
       {%- endif -%}
-      {%- if bottles > 1 %} deposit ({{ bottles }} bottles){% else %} per bottle{% endif -%}
+      {%- comment -%} Bundling: the drink's price already includes the deposit {%- endcomment -%}
+      {%- if config.mode == "bundle" -%}
+        incl. {{ deposit_money }} deposit
+      {%- else -%}
+        + {{ deposit_money }}
+        {%- if bottles > 1 %} deposit ({{ bottles }} bottles){% else %} per bottle{% endif -%}
+      {%- endif -%}
     </span>
   </div>
 {%- endif -%}

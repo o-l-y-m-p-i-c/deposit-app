@@ -21,6 +21,8 @@ const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY!,
   apiSecretKey: process.env.SHOPIFY_API_SECRET!,
   scopes: process.env.SCOPES?.split(",") || [
+    "read_inventory",
+    "write_inventory",
     "read_products",
     "write_products",
     "write_cart_transforms",
