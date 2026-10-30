@@ -11,12 +11,12 @@ import {
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Link as RemixLink } from "@remix-run/react";
-import { authenticate } from "~/shopify.server";
+import { requireSubscription } from "~/lib/billing.server";
 import { getSettings } from "~/models/settings.server";
 import { getRules } from "~/models/rules.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await requireSubscription(request);
   const settings = await getSettings(session.shop);
   const rules = await getRules(session.shop);
 

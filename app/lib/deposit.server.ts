@@ -19,6 +19,7 @@ import {
   UPDATE_DEPOSIT_VARIANT,
   UPDATE_PRODUCT_STATUS,
 } from "~/lib/admin-api.server";
+import { getInstallation } from "~/lib/billing.server";
 import { syncEligibility } from "~/lib/eligibility.server";
 
 const CART_TRANSFORM_HANDLE = "deposit-cart-transform";
@@ -317,15 +318,25 @@ export async function syncStorefrontMetafield(
 /**
  * Full sync: update deposit price, flag eligible products, sync metafields.
  * `force` rewrites every eligible product's metafield (manual "Sync now").
+ *
+ * Without an active subscription the deposit is synced as disabled
+ * (Cart Transform, deposit line and labels off) whatever the setting.
  */
 export async function fullSync(
   shop: string,
-  appInstallationId: string,
   { force = false }: { force?: boolean } = {},
 ) {
   let settings = await getOrCreateSettings(shop);
   const log = (operation: string, status: string, message: string) =>
     prisma.syncLog.create({ data: { shopId: shop, operation, status, message } });
+
+  const installation = await getInstallation(shop);
+  const appInstallationId = installation.id;
+  // What the storefront and Functions actually see
+  const depositActive = settings.enabled && installation.subscribed;
+  if (settings.enabled && !installation.subscribed) {
+    await log("billing", "warning", "No active subscription — deposit synced as disabled");
+  }
 
   try {
     let productId = settings.depositProductId;
@@ -414,7 +425,7 @@ export async function fullSync(
 
     if (cartTransformId) {
       await syncFunctionMetafields(shop, [cartTransformId], {
-        enabled: settings.enabled,
+        enabled: depositActive,
         depositMode: settings.depositMode,
         amountMinor: settings.amountMinor,
         currencyCode: settings.currencyCode,
@@ -429,7 +440,7 @@ export async function fullSync(
 
   try {
     await syncStorefrontMetafield(shop, appInstallationId, {
-      enabled: settings.enabled,
+      enabled: depositActive,
       amountMinor: settings.amountMinor,
       currencyCode: settings.currencyCode,
       depositVariantId: settings.depositVariantId,

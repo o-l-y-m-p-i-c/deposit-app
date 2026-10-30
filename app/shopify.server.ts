@@ -1,9 +1,24 @@
 import "@shopify/shopify-app-remix/server/adapters/node";
-import { shopifyApp } from "@shopify/shopify-app-remix/server";
+import { BillingInterval, shopifyApp } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import { prisma } from "~/db.server";
 
+/** The single paid plan: €9.99 every 30 days after a 14-day trial. */
+export const MONTHLY_PLAN = "Bottle Deposit Monthly";
+
 const shopify = shopifyApp({
+  billing: {
+    [MONTHLY_PLAN]: {
+      trialDays: 14,
+      lineItems: [
+        {
+          amount: 9.99,
+          currencyCode: "EUR",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+    },
+  },
   apiKey: process.env.SHOPIFY_API_KEY!,
   apiSecretKey: process.env.SHOPIFY_API_SECRET!,
   scopes: process.env.SCOPES?.split(",") || [

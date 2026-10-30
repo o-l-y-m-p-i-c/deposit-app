@@ -2,10 +2,11 @@ import { Link, Outlet, useRouteError } from "@remix-run/react";
 import { Frame, Page, Layout, BlockStack, Text, Card } from "@shopify/polaris";
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { boundary } from "@shopify/shopify-app-remix/server";
-import { authenticate } from "~/shopify.server";
+import { requireSubscription } from "~/lib/billing.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  // Every /app page requires an active subscription (redirects to approval)
+  await requireSubscription(request);
   return null;
 }
 

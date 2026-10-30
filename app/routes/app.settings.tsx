@@ -29,14 +29,15 @@ import { fullSync, cleanupShop } from "~/lib/deposit.server";
 import {
   adminGraphql,
   GET_COLLECTIONS,
-  GET_CURRENT_APP_INSTALLATION,
   GET_PRODUCT_TAGS,
 } from "~/lib/admin-api.server";
+import { getInstallation, requireSubscription } from "~/lib/billing.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session } = await requireSubscription(request);
   const settings = await getSettings(session.shop);
   const rules = await getRules(session.shop);
+  const installation = await getInstallation(session.shop);
   const depositProductCount = await prisma.depositProduct.count({
     where: { shopId: session.shop },
   });
@@ -86,23 +87,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     availableTags,
     collections,
     depositProductCount,
+    testSubscription: installation.testSubscription,
   });
 }
 
-async function getAppInstallationId(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-): Promise<string> {
-  const response = await admin.graphql(GET_CURRENT_APP_INSTALLATION);
-  const data = await response.json();
-  const id = data?.data?.currentAppInstallation?.id;
-  if (!id) throw new Error("Current app installation ID is unavailable");
-  return id;
-}
-
 export async function action({ request }: ActionFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
   const body = await request.formData();
   const intent = body.get("intent") as string;
+
+  // Cleanup before uninstall stays possible without a subscription;
+  // everything else needs one
+  const { session } =
+    intent === "cleanup"
+      ? await authenticate.admin(request)
+      : await requireSubscription(request);
 
   if (intent === "updateSettings") {
     const enabled = body.get("enabled") === "true";
@@ -115,8 +113,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Trigger full sync
     try {
-      const appInstallationId = await getAppInstallationId(admin);
-      await fullSync(session.shop, appInstallationId);
+      await fullSync(session.shop);
     } catch (e) {
       console.error("[action updateSettings] Sync failed:", e);
       return json({ error: String(e) }, { status: 500 });
@@ -144,8 +141,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Trigger full sync
     try {
-      const appInstallationId = await getAppInstallationId(admin);
-      await fullSync(session.shop, appInstallationId);
+      await fullSync(session.shop);
     } catch (e) {
       console.error("[action addRule] Sync failed:", e);
       return json({ error: String(e) }, { status: 500 });
@@ -164,8 +160,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Trigger full sync
     try {
-      const appInstallationId = await getAppInstallationId(admin);
-      await fullSync(session.shop, appInstallationId);
+      await fullSync(session.shop);
     } catch (e) {
       console.error("[action removeRule] Sync failed:", e);
       return json({ error: String(e) }, { status: 500 });
@@ -176,9 +171,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "sync") {
     try {
-      const appInstallationId = await getAppInstallationId(admin);
       // Manual sync rewrites every product flag (repairs manual edits)
-      await fullSync(session.shop, appInstallationId, { force: true });
+      await fullSync(session.shop, { force: true });
       return json({ success: true, message: "Sync complete" });
     } catch (e) {
       return json({ error: String(e) }, { status: 500 });
@@ -509,6 +503,10 @@ export default function SettingsPage() {
                   ["Include rules", String(data.includeTags.length + data.includeCollections.length)],
                   ["Exclude rules", String(data.excludeTags.length + data.excludeCollections.length)],
                   ["Products with deposit", String(data.depositProductCount)],
+                  [
+                    "Plan",
+                    `€9.99 / month${data.testSubscription ? " (test charge)" : ""}`,
+                  ],
                   [
                     "Cart mode",
                     data.settings.depositMode === "line"

@@ -24,6 +24,10 @@ api_version = "2026-07"
   uri = "/webhooks/collections-update"
   topics = [ "collections/update" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app-subscriptions-update"
+  topics = [ "app_subscriptions/update" ]
+
 [app_proxy]
 # Storefront → /apps/deposit/eligibility → {url}/eligibility
 url = "https://deposit-app-ey0c.onrender.com/proxy"
